@@ -12,8 +12,7 @@ pub struct Parser<'a> {
     cur: Token,
     /// The `token` most recently consumed.
     ///
-    /// If no tokens have been consumed, `prev` is `TokenType::Error`
-    /// with `EmptyToken` as the reason.
+    /// `prev` is an `Option` to allow `.take`ing ownership for the AST. 
     prev: Option<Token>,
     ignore_newlines: bool,
     next_id: usize,
@@ -24,6 +23,19 @@ pub struct Parser<'a> {
 const VALUE_TYPES: [TokenType; 6] = {
     use TokenType::*;
     [Any, Int, Bool, Float, Char, String]
+};
+
+pub const BINARY_OPERATORS: [TokenType; 21] = {
+    use TokenType::*;
+    [
+        Plus, Minus, Star, FSlash, Percent,
+        Tilde, Ampersand, Carrot, VertBar,
+        DoubleLess, DoubleGreater,
+        Bang, Less, Greater,
+        GreaterEqual, LessEqual, BangEqual, DoubleEqual,
+        DoubleAmpersand, DoubleVertBar,
+        DoubleDot
+    ]
 };
 
 impl<'a> From<Lexer<'a>> for Parser<'a> {

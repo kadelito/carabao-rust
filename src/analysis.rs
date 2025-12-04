@@ -4,6 +4,7 @@ use std::rc::Rc;
 
 use crate::expr_ast::*;
 use crate::lexing::{Token, TokenType};
+use crate::parsing::BINARY_OPERATORS;
 use crate::stmt_ast::{Stmt, StmtVisitor};
 use crate::values::*;
 
@@ -126,6 +127,10 @@ impl<'ast> FunctionResolver<'ast> {
         for stmt in stmts {
             self.resolve_stmt(stmt);
         }
+        for unfinished in std::mem::replace(&mut self.function_backlog, HashMap::new()) {
+            let (name, _) = unfinished;
+            self.finish_function(&name);
+        }
         if self.globals.borrow().had_error {
             None
         } else {
@@ -220,7 +225,7 @@ impl<'ast> FunctionResolver<'ast> {
         eprintln!("[unfinished] Error on line {}: {:?}", token.line(), reason);
     }
 
-    fn error_at_expr(&mut self, expr: &Expr, reason: UsageError) {
+    fn error_at_expr(&mut self, _expr: &Expr, reason: UsageError) {
         self.globals.borrow_mut().had_error = true;
         eprintln!("[unfinished] Error: {:?}", reason);
         // TODO actual error locating
@@ -233,8 +238,13 @@ impl<'ast> FunctionResolver<'ast> {
 
     /// Returns the type of the given expression.
     fn expect_type(&mut self, expected: &ValueType, actual: &Expr) -> ValueType {
+        let actual_type = self.resolve_expr(actual);
+        self.expect_resolved_type(expected, actual, actual_type)
+    }
+
+    /// Returns the type of the given expression.
+    fn expect_resolved_type(&mut self, expected: &ValueType, actual: &Expr, actual_type: ValueType) -> ValueType {
         // TODO stuff with any and casting during runtime i think
-        let actual_type = self.resolve_expr(&actual);
         if *expected != actual_type {
             self.error_msg_at_expr(
                 &actual,
@@ -272,7 +282,7 @@ impl<'ast> FunctionResolver<'ast> {
 }
 
 impl<'ast> StmtVisitor<'ast, ()> for FunctionResolver<'ast> {
-    fn visit_summon_stmt(&mut self, path: &Vec<Token>, alias: &Option<Token>, id: usize) {
+    fn visit_summon_stmt(&mut self, _path: &Vec<Token>, _alias: &Option<Token>, _id: usize) {
         todo!() // TODO
     }
 
@@ -308,11 +318,11 @@ impl<'ast> StmtVisitor<'ast, ()> for FunctionResolver<'ast> {
         false_branch: &'ast Option<Box<Stmt>>,
     ) {
         self.expect_type(&ValueType::Bool, condition);
-        todo!() // TODO
-        // self.resolve_stmt(true_branch);
-        // if let Some(false_branch) = false_branch {
-        //     self.resolve_stmt(false_branch);
-        // }
+        // TODO static type stuff
+        self.resolve_stmt(true_branch);
+        if let Some(false_branch) = false_branch {
+            self.resolve_stmt(false_branch);
+        }
     }
 
     fn visit_while_stmt(&mut self, condition: &Box<Expr>, body: &'ast Box<Stmt>) {
@@ -322,10 +332,10 @@ impl<'ast> StmtVisitor<'ast, ()> for FunctionResolver<'ast> {
         self.loop_depth -= 1;
     }
 
-    fn visit_for_stmt(&mut self, var: &Token, sequence: &Box<Expr>, body: &Box<Stmt>) {
+    fn visit_for_stmt(&mut self, _var: &Token, _sequence: &Box<Expr>, _body: &Box<Stmt>) {
         // TODO an actual range or sequence type
         // self.loop_depth += 1;
-        todo!() // TODO;
+        todo!()
         // self.loop_depth -= 1;
     }
 
@@ -401,13 +411,14 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
         _id: usize,
     ) -> ValueType {
         self.expect_type(&ValueType::Bool, left);
-        let true_type = self.resolve_expr(&middle);
-        let false_type = self.expect_type(&true_type, &right);
-        if true_type != false_type {
-            ValueType::Any
-        } else {
-            true_type
-        }
+        let true_type = self.resolve_expr(middle);
+        let false_type = self.resolve_expr(right);
+        ValueType::coerce_binary(&true_type, &false_type)
+            .unwrap_or({
+                // not equal & couldn't coerce
+                self.expect_resolved_type(&true_type, right, false_type);
+                (ValueType::Any, ValueType::Any)
+            }).0 // types are equal after this point
     }
 
     fn visit_binary_expr(
@@ -417,9 +428,11 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
         right: &Box<Expr>,
         id: usize,
     ) -> ValueType {
+        assert!(BINARY_OPERATORS.contains(op.kind()));
+
         let left = self.resolve_expr(left);
         let right = self.resolve_expr(right);
-        let Some((both, _)) = ValueType::coerce(&left, &right) else {
+        let Some((both, _)) = ValueType::coerce_binary(&left, &right) else {
             self.error_at_token(op, UsageError::IncompatibleTypes);
             return ValueType::Any;
         };
@@ -537,7 +550,9 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
 
     fn visit_cast_expr(&mut self, expr: &Box<Expr>, new_type: &ValueType, id: usize) -> ValueType {
         let old_type = self.resolve_expr(expr);
-        todo!(); // TODO
+        if !ValueType::can_cast(&new_type, &old_type) {
+            self.error_at_expr(expr, UsageError::TypeError);
+        }
         new_type.clone()
     }
 
@@ -545,8 +560,8 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
         &mut self,
         op: &Token,
         target: &Box<Expr>,
-        prefix: &bool,
-        id: usize,
+        _prefix: &bool,
+        _id: usize,
     ) -> ValueType {
         let targ_type = self.resolve_expr(target);
         match targ_type {
@@ -567,7 +582,7 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
         targ_type
     }
 
-    fn visit_call_expr(&mut self, callee: &Box<Expr>, args: &Vec<Expr>, id: usize) -> ValueType {
+    fn visit_call_expr(&mut self, callee: &Box<Expr>, args: &Vec<Expr>, _id: usize) -> ValueType {
         let callee_type = self.resolve_expr(&callee);
         if let ValueType::Object(obj) = &callee_type
             && let ObjectType::Function { ret_type, params } = obj

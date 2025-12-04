@@ -16,9 +16,6 @@ pub fn interpret(src: &str) -> Result<(), ProgramError> {
     let parser = Parser::from(src);
     let stmts = parser.parse()
         .map_err(|e| ProgramError::ParseError(e))?;
-    // for stmt in &stmts {
-    //     println!("{}", stmt_to_str(stmt));
-    // }
     let context = analyze(&stmts)
         .ok_or(ProgramError::UsageError)?;
     let function = generate(&stmts, context);
@@ -110,7 +107,7 @@ impl VM {
                 },
                 OpCode::SetGlobal => {
                     let index = self.read_byte() as usize;
-                    self.globals[index] = self.stack_pop();
+                    self.globals[index] = self.stack_peek(0);
                 },
                 OpCode::DefineGlobal => {
                     let new = self.stack_pop();
@@ -184,7 +181,7 @@ impl VM {
                             }
             #[cfg(feature = "debug")] {
                 println!("\tS={:?}<-", self.stack);
-                // println!("\tG={:?}", self.globals);
+                println!("\tG={:?}", self.globals);
             }
         }
         Ok(())
@@ -231,7 +228,8 @@ impl VM {
     }
 
     fn read_short(&mut self) -> u16 {
-        let s = (self.read_byte() as u16) << 8;
-        s | (self.read_byte() as u16)
+        let mut s = (self.read_byte() as u16) << 8;
+        s |= (self.read_byte() as u16);
+        s
     }
 }

@@ -163,7 +163,18 @@ impl ValueType {
         }
     }
 
-    pub fn coerce(type1: &ValueType, type2: &ValueType) -> Option<(ValueType, ValueType)> {
+    pub fn can_cast(to: &ValueType, from: &ValueType) -> bool {
+        if to == from
+            || *to == Self::Any {
+            true
+        } else {
+            match (from, to) {
+                _ => todo!()
+            }
+        }
+    }
+
+    pub fn coerce_binary(type1: &ValueType, type2: &ValueType) -> Option<(ValueType, ValueType)> {
         if type1 == type2 {
             // Already the same type
             Some((type1.clone(), (type2.clone())))

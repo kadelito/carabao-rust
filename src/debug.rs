@@ -24,7 +24,7 @@ pub mod opcodes {
         let mut reader = Reader { func, ip: 0 };
         while reader.ip < reader.func.code.len() {
             /**/
-            let op = OpCode::try_from(reader.byte()).unwrap();
+            let op = OpCode::try_from(reader.byte()).expect("Should be at the start of an instruction");
             let opstr = format!("{op:?}");
             print!("{:04} {opstr:<16} ", reader.ip - 1);
             match op {

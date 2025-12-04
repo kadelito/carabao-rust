@@ -187,14 +187,25 @@ impl Generator {
     }
 
     // jump_loc = ip after parsing a jump
-    fn patch_jump_to_next(&mut self, jump_loc: usize) {
-        let offset = (self.function.code.len() as isize) - (jump_loc as isize) - 2;
-        // I HATE OFF-BY-ONE ERRORS!!!
+    fn patch_jump_to_next(&mut self, jump_arg_index: usize) {
+        //                                                          pointing at idx of arg + 2 at time of jump
+        let offset = (self.function.code.len() as isize) - (jump_arg_index as isize + 2);
         if i16::MIN as isize <= offset && offset <= i16::MAX as isize {
-            self.function.code[ jump_loc ] = (offset >> 8) as u8; // arg byte 1
-            self.function.code[jump_loc+1] = (offset & 0xff) as u8; // arg byte 2
+            self.function.code[ jump_arg_index ] = (offset >> 8) as u8; // arg byte 1
+            self.function.code[jump_arg_index+1] = (offset & 0xff) as u8; // arg byte 2
         } else {
-            todo!("JumpLong?")
+            todo!("JumpLong with i32?")
+        }
+    }
+
+    fn write_jump_back(&mut self, jump_loc: usize) {
+        //                                  current len + 1 instr byte + 2 arg bytes = 3 at time of jump
+        let offset = (jump_loc as isize) - (self.function.code.len() as isize + 3);
+        if i16::MIN as isize <= offset && offset <= i16::MAX as isize {
+            self.write_instr(OpCode::Jump);
+            self.write_short((offset as i16).cast_unsigned());
+        } else {
+            todo!("JumpLong? but backwards")
         }
     }
 
@@ -294,11 +305,27 @@ impl StmtVisitor<'_, ()> for Generator {
         true_branch: &Box<Stmt>,
         false_branch: &Option<Box<Stmt>>,
     ) -> () {
-        todo!() // TODO
+        self.code_expr(condition);
+        let else_jump = self.write_jump(OpCode::JumpIfNot);
+        self.code_stmt(true_branch);
+        let mut end_jump = 0;
+        if false_branch.is_some() {
+            end_jump = self.write_jump(OpCode::Jump);
+        }
+        self.patch_jump_to_next(else_jump);
+        if let Some(false_branch) = false_branch {
+            self.code_stmt(false_branch);
+            self.patch_jump_to_next(end_jump);
+        }
     }
 
     fn visit_while_stmt(&mut self, condition: &Box<Expr>, body: &Box<Stmt>) -> () {
-        todo!() // TODO
+        let start = self.function.code.len();
+        self.code_expr(condition);
+        let end = self.write_jump(OpCode::JumpIfNot);
+        self.code_stmt(body);
+        self.write_jump_back(start);
+        self.patch_jump_to_next(end);
     }
 
     fn visit_for_stmt(
@@ -426,7 +453,10 @@ impl ExprVisitor<'_, ()> for Generator {
         self.code_expr(value);
         let loc = self.bindings.get(&id).expect("Assign expr should be bound.");
         match loc.clone() {
-            Binding::Stack(index) => todo!(), // TODO
+            Binding::Stack(index) => {
+                self.write_instr(OpCode::SetLocal);
+                self.write_byte(index as u8);
+            },
             Binding::Globals(index) => {
                 self.write_instr(OpCode::SetGlobal);
                 self.write_byte(index as u8);
@@ -467,7 +497,7 @@ impl ExprVisitor<'_, ()> for Generator {
     fn visit_variable_expr(&mut self, _identifier: &Token, id: usize) -> () {
         match self.bindings.remove(&id).expect("Variable expr should be bound") {
             Binding::Stack(index) => {
-                self.write_instr(OpCode::GetGlobal);
+                self.write_instr(OpCode::GetLocal);
                 self.write_byte(index as u8);
             }
             Binding::Globals(index) => {
