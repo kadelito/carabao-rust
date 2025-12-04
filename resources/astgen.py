@@ -41,6 +41,7 @@ def generate(name: str, desc: str, add_id = False):
     # return
     print("#[derive(Debug)]")
     print(f"pub enum {name} {{")
+    print( "    // TODO the commented-out ones")
     for node in desc:
         print(f"    {node[0]}", end=" { ")
         for i, field in enumerate(node[1]):

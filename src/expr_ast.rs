@@ -3,6 +3,7 @@ use crate::values::*;
 
 #[derive(Debug)]
 pub enum Expr {
+    // TODO the commented-out ones
     Conditional { condition: Box<Expr>, if_true: Box<Expr>, if_false: Box<Expr>, id: usize },
     Binary { left: Box<Expr>, op: Token, right: Box<Expr>, id: usize },
     Assign { assignee: Box<Expr>, value: Box<Expr>, id: usize },

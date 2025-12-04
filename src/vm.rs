@@ -36,7 +36,7 @@ pub fn run(function: Function) -> Result<(), ProgramError> {
 }
 
 struct VM {
-    // TODO function & ip -> call stack
+    // TODO call stack
     ip: usize,
     stack: Vec<Value>,
     function: Function,
