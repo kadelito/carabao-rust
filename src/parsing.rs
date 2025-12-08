@@ -3,7 +3,8 @@ use crate::{
     expr_ast::*,
     lexing::*,
     stmt_ast::Stmt,
-    values::{Value, ValueType},
+    values::*,
+    types::*,
 };
 
 pub struct Parser<'a> {
@@ -12,28 +13,27 @@ pub struct Parser<'a> {
     cur: Token,
     /// The `token` most recently consumed.
     ///
-    /// `prev` is an `Option` to allow `.take`ing ownership for the AST. 
+    /// `prev` is an `Option` to let the AST take ownership without cloning. 
     prev: Option<Token>,
     ignore_newlines: bool,
     next_id: usize,
-    first_error: Option<ParseError>,
+    errors: Vec<ParseError>,
     panic_mode: bool,
 }
 
-const VALUE_TYPES: [TokenType; 6] = {
+const VALID_TYPES: [TokenType; 6] = {
     use TokenType::*;
     [Any, Int, Bool, Float, Char, String]
 };
 
-pub const BINARY_OPERATORS: [TokenType; 21] = {
+pub const BINARY_OPERATORS: [TokenType; 17] = {
     use TokenType::*;
     [
         Plus, Minus, Star, FSlash, Percent,
-        Tilde, Ampersand, Carrot, VertBar,
+        Ampersand, Carrot, VertBar,
         DoubleLess, DoubleGreater,
-        Bang, Less, Greater,
+        Less, Greater,
         GreaterEqual, LessEqual, BangEqual, DoubleEqual,
-        DoubleAmpersand, DoubleVertBar,
         DoubleDot
     ]
 };
@@ -46,7 +46,7 @@ impl<'a> From<Lexer<'a>> for Parser<'a> {
             prev: None,
             ignore_newlines: false,
             next_id: 0,
-            first_error: None,
+            errors: Vec::new(),
             panic_mode: false,
         }
     }
@@ -59,15 +59,16 @@ impl<'a> From<Lexer<'a>> for Parser<'a> {
 */
 
 impl<'a> Parser<'a> {
-    pub fn parse(mut self) -> Result<Vec<Stmt>, ParseError> {
+    pub fn parse(mut self) -> Result<Vec<Stmt>, Vec<ParseError>> {
         self.advance(); // initializes self.cur
 
         let mut stmts = Vec::new();
         while !self.at_end() {
             stmts.push(self.declaration());
+            self.skip_newlines();
         }
-        if let Some(e) = self.first_error {
-            Err(e)
+        if !self.errors.is_empty() {
+            Err(self.errors)
         } else {
             Ok(stmts)
         }
@@ -75,7 +76,6 @@ impl<'a> Parser<'a> {
 
     fn declaration(&mut self) -> Stmt {
         self.skip_newlines();
-
         let decl = if self.try_consume(TokenType::Func) {
             self.function_def()
         } else if self.try_consume(TokenType::New) {
@@ -103,6 +103,8 @@ impl<'a> Parser<'a> {
                 let val_type = self.expect_type();
                 let param = self.expect_binding();
                 params.push((param, val_type));
+                // TODO default arguments
+                // TODO variable length arguments
 
                 if !self.try_consume(TokenType::Comma) {
                     break;
@@ -182,7 +184,7 @@ impl<'a> Parser<'a> {
         let mut statements = Vec::new();
         while !self.at_end() && !self.check(TokenType::CloseBrace) {
             statements.push(self.declaration());
-            self.skip_newlines();
+            self.skip_newlines(); // so in `{...stmt() \n }`, the '}' is seen 
         }
         self.expect_because(TokenType::CloseBrace, ParseError::BraceNotClosed);
         Stmt::Block { statements }
@@ -255,6 +257,7 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
+        self.expect_stmt_end();
         Stmt::Keyword { keyword, arg }
     }
 
@@ -277,8 +280,8 @@ impl<'a> Parser<'a> {
         let mut parser = Parser::from(lexer);
         parser.advance();
         let result = parser.expression();
-        if let Some(e) = parser.first_error {
-            Err(e)
+        if !parser.errors.is_empty() {
+            Err(parser.errors[0])
         } else {
             // println!("{}", to_str(&result, false));
             Ok(result)
@@ -323,12 +326,43 @@ impl<'a> Parser<'a> {
     }
 
     fn logic_or(&mut self) -> Expr {
-        self.left_assoc_bin_series(Parser::logic_and, &[TokenType::DoubleVertBar])
+        self.left_assoc_boolean_series(Parser::logic_and, &[TokenType::DoubleVertBar])
     }
 
     fn logic_and(&mut self) -> Expr {
-        // self.left_assoc_bin_series(Parser::keyword_bin_op, &[TokenType::DoubleAmpersand])
-        self.left_assoc_bin_series(Parser::equality, &[TokenType::DoubleAmpersand])
+        self.left_assoc_boolean_series(Parser::equality, &[TokenType::DoubleAmpersand])
+        // self.left_assoc_boolean_series(Parser::keyword_bin_op, &[TokenType::DoubleAmpersand])
+    }
+
+    /// Helper for logic_or & logic_and.
+    /// Instead of returning a single operand or an Expr::Binary,
+    /// returns a single operand or an Expr::Boolean.
+    fn left_assoc_boolean_series(
+        &mut self,
+        operand: fn(&mut Self) -> Expr,
+        operators: &[TokenType],
+    ) -> Expr {
+        // case when no left operand,
+        // continue ahead if it's a unary prefix
+        if !self.check_any(&[TokenType::Bang, TokenType::Minus, TokenType::Tilde])
+            && self.try_consume_any(operators)
+        {
+            self.error_at_prev(ParseError::BinOpNoLeft);
+            return self.left_assoc_bin_series(operand, operators);
+        }
+
+        let mut left = operand(self);
+        if self.try_consume_any(operators) {
+            let op = self.take_prev();
+            self.skip_newlines();
+            let right = self.left_assoc_boolean_series(operand, operators);
+            left = Expr::Boolean { left: Box::new(left), op, right: Box::new(right), id: self.new_id(),};
+        }
+        left
+    }
+
+    fn keyword_bin_op(&mut self) -> Expr {
+        self.left_assoc_bin_series(Parser::equality, &[TokenType::In])
     }
 
     fn equality(&mut self) -> Expr {
@@ -394,7 +428,9 @@ impl<'a> Parser<'a> {
             expr
         }
     }
-
+    
+    /// Parses a binary expression with `operand`
+    /// and any of `operators`, equal in precedence
     fn left_assoc_bin_series(
         &mut self,
         operand: fn(&mut Self) -> Expr,
@@ -436,31 +472,51 @@ impl<'a> Parser<'a> {
                 id: self.new_id(),
             };
         }
-        self.call()
+        self.call_or_similar()
     }
 
-    /// Calls(), .gets, indexing[]
-    fn call(&mut self) -> Expr {
-        let callee = self.primary();
-        if self.try_consume(TokenType::OpenParen) {
-            let callee = Box::new(callee);
-            let mut args = Vec::new();
-            if !self.check(TokenType::CloseParen) {
-                // no do-while :(
-                args.push(self.expression());
-                while self.try_consume(TokenType::Comma) {
-                    args.push(self.expression());
+    /// `calls()`, `.gets`, `.methods()` and `indexing[]`
+    /// 
+    /// All are suffixes and obv the same precedence, so they go together
+    fn call_or_similar(&mut self) -> Expr {
+        let mut obj = self.primary();
+        loop {
+            let id = self.new_id();
+            if self.try_consume(TokenType::OpenParen) {
+                let callee = Box::new(obj);
+                let args = self.expr_list(TokenType::CloseParen);
+                obj = Expr::Call { callee, args, id };
+            } else if self.try_consume(TokenType::Dot) {
+                self.expect(TokenType::Identifier);
+                let attribute = self.take_prev();
+                if self.try_consume(TokenType::OpenParen) {
+                    let args = self.expr_list(TokenType::CloseParen);
+                    obj = Expr::Method { obj: Box::new(obj), method: attribute, args, id }
+                } else {
+                    obj = Expr::Get { obj: Box::new(obj), property: attribute, id };
                 }
+            } else if self.try_consume(TokenType::OpenBracket) {
+                let query = Box::new(self.expression());
+                self.expect(TokenType::CloseBracket);
+                obj = Expr::Slice { sequence: Box::new(obj), query, id }
+            } else {
+                break;
             }
-            self.expect(TokenType::CloseParen);
-            Expr::Call {
-                callee,
-                args,
-                id: self.new_id(),
-            }
-        } else {
-            callee
         }
+        obj
+    }
+
+    fn expr_list(&mut self, end_token: TokenType) -> Vec<Expr> {
+        let mut list = Vec::new();
+        if !self.check(end_token) {
+            // no do-while :(
+            list.push(self.expression());
+            while self.try_consume(TokenType::Comma) {
+                list.push(self.expression());
+            }
+        }
+        self.expect(end_token);
+        list
     }
 
     fn primary(&mut self) -> Expr {
@@ -524,8 +580,29 @@ impl<'a> Parser<'a> {
             }
         } else if self.try_consume(TokenType::StringLiteral) {
             let mut literal = self.take_prev();
-            let value = literal.take_lexeme().unwrap();
-            let value = Value::from(value[1..value.len() - 1].to_owned()); // trim quotes
+            let raw = literal.take_lexeme().unwrap();
+            let mut raw_chars = raw[1..raw.len() - 1].chars(); // trim quotes
+            let mut value = String::new();
+            while let Some(c) = raw_chars.next() {
+                if c == '\\' {
+                    let escaped = match raw_chars.next().expect("please") {
+                        '\\' => '\\',
+                        'n' => '\n',
+                        'r' => '\r',
+                        't' => '\t',
+                        '"' => '\"',
+                        _ => {
+                            self.error_at(&literal, ParseError::InvalidEscapeCharacter);
+                            '\\'
+                        },
+                    };
+                    value.push(escaped);
+                } else {
+                    value.push(c);
+                }
+            }
+            value.shrink_to_fit();
+            let value = Value::from(value);
             return Expr::Literal {
                 repr: literal,
                 val: value,
@@ -611,9 +688,32 @@ impl<'a> Parser<'a> {
 
     fn expect_type(&mut self) -> ValueType {
         self.skip_newlines();
-        if self.try_consume_any(&VALUE_TYPES) {
+        if self.try_consume_any(&VALID_TYPES) {
             let token = self.take_prev();
-            ValueType::from(*token.kind()).unwrap()
+            ValueType::from_token(*token.kind()).unwrap()
+        } else if false && self.try_consume(TokenType::Func) {
+            self.expect(TokenType::OpenParen);
+            let mut params = Vec::new();
+            if !self.check(TokenType::CloseParen) {
+                // still no do-while :((())
+                params.push(self.expect_type());
+                while self.try_consume(TokenType::Comma) {
+                    params.push(self.expect_type());
+                }
+            };
+            self.expect(TokenType::CloseParen);
+            let ret_type = if self.try_consume(TokenType::Colon) {
+                self.expect_type()
+                // so you technically could do:
+                // new func(int): func(int): int f = /* ... */
+                // let y = f(1)(2) + 3 // cursed
+            } else {
+                ValueType::None
+            };
+
+            let ret_type = Box::new(ret_type);
+            let params = params.into_boxed_slice();
+            ValueType::Object(ObjectType::Function { ret_type, params })
         } else {
             self.error_at_next(ParseError::NoValueType);
             ValueType::None
@@ -748,7 +848,7 @@ impl<'a> Parser<'a> {
             reason
         );
 
-        self.first_error = Some(reason.clone());
+        self.errors.push(reason.clone());
     }
 }
 
@@ -774,6 +874,7 @@ pub enum ParseError {
     NotAssignTarget,
     NoDeclaration,
     NoValueType,
+    InvalidEscapeCharacter,
 
     ExpectedToken(TokenType),
 

@@ -2,26 +2,39 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use crate::builtins::GLOBAL_FUNCS;
 use crate::expr_ast::*;
 use crate::lexing::{Token, TokenType};
 use crate::parsing::BINARY_OPERATORS;
 use crate::stmt_ast::{Stmt, StmtVisitor};
 use crate::values::*;
+use crate::types::*;
 
-pub fn analyze(program: &Vec<Stmt>) -> Option<AnalysisResult> {
+pub fn analyze(program: &Vec<Stmt>) -> Result<AnalysisResult, Vec<UsageError>> {
     // Initialize stuff
     let globals = Rc::new(RefCell::new(Globals::new()));
     let mut resolver = FunctionResolver::new(true);
     resolver.globals = globals;
 
+    for (name, obj) in GLOBAL_FUNCS {
+        resolver.declare_global((*name).to_owned(), Value::from(obj).get_type());
+    }
+
     resolver.resolve(program)
 }
 
+/// All hashmaps with `usize` keys correspond to AST node `id`s.
 pub struct AnalysisResult {
-    // map of variable/assign expr id -> location
     pub bindings: HashMap<usize, Binding>,
+    /// Maps `Expr::Binary` `id`s to the type both operands should be.
+    /// 
+    /// This field exists because binary coercions have different rules
+    /// from singularly differing `ValueType`s
+    /// (mainly bc string concatention)
     pub bin_types: HashMap<usize, ValueType>,
     pub expr_types: HashMap<usize, ValueType>,
+    // TODO
+    // pub coercions: HashMap<usize, ValueType>,
 }
 
 impl AnalysisResult {
@@ -55,11 +68,11 @@ pub enum UsageError {
 
 struct FunctionResolver<'ast> {
     ret_type: ValueType,
-    /// this will be the constant pool i think
     value_count: usize,
     /// jlox reference
     local_bindings: Vec<VarData>,
     depth: usize,
+    /// Whether the cu
     is_global: bool,
     loop_depth: usize,
     function_backlog: HashMap<String, TempFunction<'ast>>,
@@ -67,6 +80,7 @@ struct FunctionResolver<'ast> {
     globals: Rc<RefCell<Globals>>,
 }
 
+#[derive(Debug)]
 struct TempFunction<'ast> {
     ret_type: &'ast ValueType,
     params: &'ast Vec<(Token, ValueType)>,
@@ -74,7 +88,9 @@ struct TempFunction<'ast> {
 }
 
 struct Globals {
-    had_error: bool,
+    errors: Vec<UsageError>,
+    /// Global variables only.
+    /// No main script locals or variables in functions.
     bindings: Vec<VarData>,
     final_data: AnalysisResult,
 }
@@ -83,7 +99,7 @@ impl Globals {
     fn new() -> Self {
         Self {
             bindings: Vec::new(),
-            had_error: false,
+            errors: Vec::new(),
             final_data: AnalysisResult::new(),
         }
     }
@@ -113,33 +129,37 @@ impl<'ast> FunctionResolver<'ast> {
         }
     }
 
+    pub fn resolve(&mut self, stmts: &'ast Vec<Stmt>) -> Result<AnalysisResult, Vec<UsageError>> {
+        for stmt in stmts {
+            self.resolve_stmt(stmt);
+        }
+        // Resolve functions that are never called
+        // We assume the global state they use is at the end of execution
+        // (aka after all global declarations & redeclarations)
+        for unfinished in std::mem::replace(&mut self.function_backlog, HashMap::new()) {
+            let (_, func) = unfinished;
+            self.finish_function(func);
+        }
+        if !self.globals.borrow().errors.is_empty() {
+            Err(std::mem::replace(&mut self.globals.borrow_mut().errors, Vec::new()))
+        } else {
+            let data = std::mem::replace(
+                &mut self.globals.borrow_mut().final_data,
+                AnalysisResult::new(),
+            );
+            Ok(data)
+        }
+    }
+
     fn resolve_stmt(&mut self, stmt: &'ast Stmt) {
         stmt.accept(self)
     }
 
     fn resolve_expr(&mut self, expr: &Expr) -> ValueType {
         let expr_type = expr.accept(self);
+        // Save type of each sub-expression
         self.globals.borrow_mut().final_data.expr_types.insert(expr.id(), expr_type.clone());
         expr_type
-    }
-
-    pub fn resolve(&mut self, stmts: &'ast Vec<Stmt>) -> Option<AnalysisResult> {
-        for stmt in stmts {
-            self.resolve_stmt(stmt);
-        }
-        for unfinished in std::mem::replace(&mut self.function_backlog, HashMap::new()) {
-            let (name, _) = unfinished;
-            self.finish_function(&name);
-        }
-        if self.globals.borrow().had_error {
-            None
-        } else {
-            let data = std::mem::replace(
-                &mut self.globals.borrow_mut().final_data,
-                AnalysisResult::new(),
-            );
-            Some(data)
-        }
     }
 
     fn find_var(&self, ident: &String) -> Option<Binding> {
@@ -151,7 +171,7 @@ impl<'ast> FunctionResolver<'ast> {
             }
         }
         // Look in globals next
-        for (i, data) in self.globals.borrow().bindings.iter().enumerate() {
+        for (i, data) in self.globals.borrow().bindings.iter().enumerate().rev() {
             if *data.name == *ident {
                 return Some(Binding::Globals(i));
             }
@@ -174,18 +194,6 @@ impl<'ast> FunctionResolver<'ast> {
 
     fn declare_global(&mut self, name: String, val_type: ValueType) {
         let globals = &mut self.globals.borrow_mut().bindings;
-        for i in 0..globals.len() {
-            if *globals[i].name == name {
-                // Redeclared
-                globals[i] = VarData {
-                    name,
-                    val_type: Some(val_type),
-                    depth: 0,
-                };
-                return;
-            }
-        }
-        // Doesn't exist, define a new one
         globals.push(VarData {
             name,
             val_type: Some(val_type),
@@ -221,13 +229,13 @@ impl<'ast> FunctionResolver<'ast> {
     }
 
     fn error_at_token(&mut self, token: &Token, reason: UsageError) {
-        self.globals.borrow_mut().had_error = true;
         eprintln!("[unfinished] Error on line {}: {:?}", token.line(), reason);
+        self.globals.borrow_mut().errors.push(reason);
     }
-
+    
     fn error_at_expr(&mut self, _expr: &Expr, reason: UsageError) {
-        self.globals.borrow_mut().had_error = true;
         eprintln!("[unfinished] Error: {:?}", reason);
+        self.globals.borrow_mut().errors.push(reason);
         // TODO actual error locating
     }
 
@@ -244,8 +252,7 @@ impl<'ast> FunctionResolver<'ast> {
 
     /// Returns the type of the given expression.
     fn expect_resolved_type(&mut self, expected: &ValueType, actual: &Expr, actual_type: ValueType) -> ValueType {
-        // TODO stuff with any and casting during runtime i think
-        if *expected != actual_type {
+        if ValueType::can_convert_type(expected, &actual_type) {
             self.error_msg_at_expr(
                 &actual,
                 UsageError::TypeError,
@@ -255,11 +262,14 @@ impl<'ast> FunctionResolver<'ast> {
         actual_type
     }
 
-    fn finish_function(&mut self, name: &String) {
-        let Some(func) = self.function_backlog.remove(name) else {
-            // Assume the function has already been resolved at a previous call
-            return;
+    fn finish_function_by_name(&mut self, name: &String) {
+        if let Some(func) = self.function_backlog.remove(name) {
+            self.finish_function(func);
         };
+        // Assume the function has already been resolved at a previous call
+    }
+
+    fn finish_function(&mut self, func: TempFunction) {
         let TempFunction {
             ret_type,
             params,
@@ -363,12 +373,16 @@ impl<'ast> StmtVisitor<'ast, ()> for FunctionResolver<'ast> {
                 }
             }
             TokenType::Return => {
-                // TODO actually do this please
-                if let Some(arg) = arg {
-                    self.resolve_expr(arg);
+                let arg_type = if let Some(arg) = arg {
+                    self.resolve_expr(arg)
+                } else {
+                    ValueType::None
+                };
+                if self.ret_type != arg_type {
+                    self.error_at_token(keyword, UsageError::TypeError);
                 }
             }
-            _ => panic!("Invalid token for keyword statement"),
+            _ => panic!("Invalid token for keyword statement made it to analysis"),
         }
     }
 
@@ -380,13 +394,12 @@ impl<'ast> StmtVisitor<'ast, ()> for FunctionResolver<'ast> {
         body: &'ast Vec<Stmt>,
         _id: usize,
     ) {
+        let temp_name = name.copy_ident();
+        let val_type = ValueType::func_type(ret_type, params);
         if self.in_global_scope() {
-            self.declare_global(name.copy_ident(), ValueType::func_type(ret_type, params));
+            self.declare_global(temp_name, val_type);
         } else {
-            self.declare_local(
-                name.copy_ident(),
-                Some(ValueType::func_type(ret_type, params)),
-            );
+            self.declare_local(temp_name, Some(val_type))
         }
         // Wait for resolving until first call
         // No forward declarations in this household
@@ -531,7 +544,6 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
         let val_type = self.resolve_expr(&value);
         // rust i swear to god
         match &**assignee {
-            // TODO other valid assignees (get, index)
             Expr::Variable { identifier, .. } => {
                 match self.get_var(identifier.lexeme().unwrap()) {
                     Some((binding, data)) => {
@@ -543,14 +555,20 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
                     None => self.error_at_expr(assignee, UsageError::UndefinedIdent),
                 }
             }
+            Expr::Get { obj, property, .. } => {
+                todo!()
+            }
+            Expr::Slice { sequence, query, .. } => {
+                todo!()
+            }
             _ => self.error_at_expr(&assignee, UsageError::InvalidAssign),
         }
         val_type
     }
 
-    fn visit_cast_expr(&mut self, expr: &Box<Expr>, new_type: &ValueType, id: usize) -> ValueType {
+    fn visit_cast_expr(&mut self, expr: &Box<Expr>, new_type: &ValueType, _id: usize) -> ValueType {
         let old_type = self.resolve_expr(expr);
-        if !ValueType::can_cast(&new_type, &old_type) {
+        if !ValueType::can_convert_type(new_type, &old_type) {
             self.error_at_expr(expr, UsageError::TypeError);
         }
         new_type.clone()
@@ -558,13 +576,13 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
 
     fn visit_unary_expr(
         &mut self,
-        op: &Token,
+        _op: &Token, // theres only 3 operators and they're all very similar
         target: &Box<Expr>,
         _prefix: &bool,
         _id: usize,
     ) -> ValueType {
-        let targ_type = self.resolve_expr(target);
-        match targ_type {
+        let target_type = self.resolve_expr(target);
+        match target_type {
             ValueType::Int => {
                 // negate & bitwise not
                 return ValueType::Int
@@ -579,7 +597,7 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
             },
             _ => self.error_at_expr(target, UsageError::TypeError),
         }
-        targ_type
+        target_type
     }
 
     fn visit_call_expr(&mut self, callee: &Box<Expr>, args: &Vec<Expr>, _id: usize) -> ValueType {
@@ -588,10 +606,15 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
             && let ObjectType::Function { ret_type, params } = obj
         {
             let mut args_match = true;
-            for i in 0..args.len() {
-                if self.resolve_expr(&args[i]) != params[i] {
-                    args_match = false;
-                    self.error_at_expr(&args[i], UsageError::ParamMismatch);
+            if args.len() != params.len() {
+                self.error_at_expr(callee, UsageError::ParamMismatch);
+            } else {
+                for i in 0..args.len() {
+                    let actual = self.expect_type(&params[i], &args[i]);
+                    if actual != params[i] {
+                        args_match = false;
+                        self.error_at_expr(&args[i], UsageError::ParamMismatch);
+                    }
                 }
             }
             if args_match {
@@ -602,7 +625,7 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
                     Expr::Variable { identifier, .. } => identifier.copy_ident(),
                     _ => String::new(),
                 };
-                self.finish_function(&ident);
+                self.finish_function_by_name(&ident);
             }
             *ret_type.clone()
         } else {
@@ -640,9 +663,31 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
     fn visit_literal_expr(&mut self, repr: &Token, val: &Value, _id: usize) -> ValueType {
         self.value_count += 1;
         if self.value_count == u8::MAX as usize {
-            // allow
+            // TODO increase max (maybe to u32? any more and its like. whats goin on) and have a OP_CONSTANT_WIDE
             self.error_at_token(repr, UsageError::TooManyConstants);
         }
         val.get_type()
+    }
+    
+    fn visit_boolean_expr(&mut self,
+        left: &'_ Box<Expr>, _op: &'_ Token, right: &'_ Box<Expr>, _id: usize) -> ValueType {
+        self.expect_type(&ValueType::Bool, left);
+        self.expect_type(&ValueType::Bool, right);
+        ValueType::Bool
+    }
+    
+    fn visit_slice_expr(&mut self,
+        sequence: &'_ Box<Expr>, query: &'_ Box<Expr>, id: usize) -> ValueType {
+        todo!()
+    }
+    
+    fn visit_method_expr(&mut self,
+        obj: &'_ Box<Expr>, method: &'_ Token, args: &'_ Vec<Expr>, id: usize) -> ValueType {
+        todo!()
+    }
+    
+    fn visit_get_expr(&mut self,
+        obj: &'_ Box<Expr>, property: &'_ Token, id: usize) -> ValueType {
+        todo!()
     }
 }

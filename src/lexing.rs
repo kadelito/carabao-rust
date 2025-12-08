@@ -179,6 +179,14 @@ impl<'a> Lexer<'a> {
                         while !self.at_end() && self.peek() != '\n' {
                             self.advance();
                         }
+                    } else if self.peek_ahead(1) == '*' {
+                        while !self.at_end() && self.peek_substring(0, 2) != "*/" {
+                            self.advance();
+                        }
+                        // Skip */
+                        self.advance();
+                        self.advance();
+                        // i dont really care about unterminated comments
                     } else {
                         // a single forward slash
                         return;
@@ -287,13 +295,17 @@ impl<'a> Lexer<'a> {
 
     // First quote has been consumed atp
     fn string(&mut self) -> Token {
-        if self.peek_substring(0, 2) == "\"\"" {
+        let triple_quotes = self.peek_substring(0, 2) == "\"\"";
+        if triple_quotes {
             // Triple quotes, multiline string
             while !self.at_end() && self.peek_substring(0, 3) != "\"\"\"" {
                 if self.peek() == '\n' {
                     self.line += 1;
                 }
                 self.advance();
+                if self.peek() == '\\' {
+                    self.advance();
+                }
             }
             // Try to consume two quotes, handle error later
             if !self.at_end() {
@@ -304,6 +316,9 @@ impl<'a> Lexer<'a> {
             // Single-quote string
             while !self.at_end() && self.peek() != '"' && self.peek() != '\n' {
                 self.advance();
+                if self.peek() == '\\' {
+                    self.advance(); // skip escaped quote. or newline
+                }
             }
         }
 
@@ -315,9 +330,19 @@ impl<'a> Lexer<'a> {
 
         self.advance(); // Consume end quote
 
-        return self.make_token(TokenType::StringLiteral);
+        let token;
+        if triple_quotes {
+            // change start & cur to trim 2 quotes, pretend it's single-quoted
+            self.start += 2;
+            self.cur -= 2;
+            token = self.make_token(TokenType::StringLiteral);
+            self.cur += 2;
+        } else {
+            token = self.make_token(TokenType::StringLiteral);
+        }
+        token
     }
-
+    
     // TODO non-decimal numbers (0xff, 0b1011, etc)
     fn number(&mut self) -> Token {
         while self.peek().is_ascii_digit() {
@@ -337,15 +362,46 @@ impl<'a> Lexer<'a> {
         self.make_token(kind)
     }
 
-    fn one_or_two_char_token(
-        &mut self,
-        from_one: TokenType,
-        pairs: Vec<(char, TokenType)>,
-    ) -> Token {
+    fn one_or_two_char_token(&mut self, from_one: TokenType, pairs: Vec<(char, TokenType)>) -> Token {
         for (c, from_two) in pairs {
             if self.try_consume(c) {
                 return self.make_token(from_two);
             }
+        }
+        self.make_token(from_one)
+    }
+
+    /// Tries to match multiple tokens
+    /// that start with the char that was just consumed.
+    /// 
+    /// Each tuple in `pairs` has the rest of the string and the corresponding token.
+    /// 
+    /// For example, to consume `+`, `++`, or `+=`, you might do:
+    /// ```
+    /// use TokenType as T;
+    /// match chars.next() {
+    ///     /* ... */
+    ///     '+' => self.one_or_more_char_token(T::Plus, vec![
+    ///         ("=", T::PlusEqual),
+    ///         ("+", T:DoublePlus)])
+    /// }
+    /// ```
+    fn one_or_more_char_token(
+        &mut self,
+        from_one: TokenType,
+        pairs: Vec<(&str, TokenType)>,
+    ) -> Token {
+        let token_start = self.cur;
+        'next_token: for (s, kind) in pairs {
+            for c in s.chars() {
+                if !self.try_consume(c) {
+                    // if ANY character doesn't match, restart with the next token
+                    self.cur = token_start;
+                    continue 'next_token;
+                }
+            }
+            // we consumed the whole thing without breaking
+            return self.make_token(kind);
         }
         self.make_token(from_one)
     }
@@ -378,16 +434,18 @@ impl<'a> Lexer<'a> {
             ')' => self.make_token(TokenType::CloseParen),
             '{' => self.make_token(TokenType::OpenBrace),
             '}' => self.make_token(TokenType::CloseBrace),
-            '+' => self.make_token(TokenType::Plus),
-            '-' => self.make_token(TokenType::Minus),
-            '*' => self.make_token(TokenType::Star),
-            '/' => self.make_token(TokenType::FSlash),
-            '%' => self.make_token(TokenType::Percent),
+            '[' => self.make_token(TokenType::OpenBracket),
+            ']' => self.make_token(TokenType::CloseBracket),
             ',' => self.make_token(TokenType::Comma),
             '?' => self.make_token(TokenType::Question),
             ':' => self.make_token(TokenType::Colon),
             ';' => self.make_token(TokenType::Semicolon),
             '~' => self.make_token(TokenType::Tilde),
+            '+' => self.make_token(TokenType::Plus),
+            '-' => self.make_token(TokenType::Minus),
+            '*' => self.make_token(TokenType::Star),
+            '/' => self.make_token(TokenType::FSlash),
+            '%' => self.make_token(TokenType::Percent),
             '^' => self.make_token(TokenType::Carrot),
             '\n' => {
                 let token = self.make_token(TokenType::Newline);
@@ -407,9 +465,7 @@ impl<'a> Lexer<'a> {
             ),
             '>' => self.one_or_two_char_token(
                 TokenType::Greater,
-                vec![
-                    ('=', TokenType::GreaterEqual),
-                    ('>', TokenType::DoubleGreater),
+                vec![('=', TokenType::GreaterEqual), ('>', TokenType::DoubleGreater),
                 ],
             ),
             '&' => self.one_or_two_char_token(
@@ -435,11 +491,12 @@ impl<'a> Lexer<'a> {
 
             // Backslash skips until next newline
             '\\' => {
-                self.skip_ignored();
+                self.skip_ignored(); // comment or whitespace before newline
                 if self.try_consume('\n') {
                     self.line += 1;
                     self.scan_token() // return the following token recursively
                 } else {
+                    // whoopsie, no newline token
                     let next_token = self.error_token(TokenizationError::UnexpectedChar);
                     while !self.at_end() && !self.try_consume('\n') {
                         self.advance();
@@ -500,7 +557,7 @@ impl Token {
     /// Panics if the lexeme has already been taken.
     /// 
     /// Intended for only identifiers,
-    /// as it is expected for their lexemes to not be taken.d
+    /// as it is expected for their lexemes to not be taken.
     pub fn copy_ident(&self) -> String {
         self.lexeme.as_ref().unwrap().clone()
     }
@@ -531,6 +588,8 @@ impl Token {
             T::CloseParen => ")",
             T::OpenBrace => "{",
             T::CloseBrace => "}",
+            T::OpenBracket => "[",
+            T::CloseBracket => "]",
             T::Dot => ".",
             T::Comma => ",",
             T::Question => "?",
@@ -600,6 +659,8 @@ pub enum TokenType {
     CloseParen,
     OpenBrace,
     CloseBrace,
+    OpenBracket,
+    CloseBracket,
     Newline,
     Semicolon,
     Dot,
@@ -620,11 +681,13 @@ pub enum TokenType {
     Less,
     Greater,
 
-    // Double character
+    // Two or more character
+    // TODO assignment operators, have fun testing :)
+    // DoublePlus, DoubleMinus,
     // PlusEqual, MinusEqual, StarEqual, FSlashEqual, PercentEqual,
     // AmpersandEqual, CarrotEqual, VertBarEqual,
-    // DoublePlus,
-    // DoubleMinus,
+    // DoubleLessEqual, DoubleGreaterEqual,
+    // DoubleAmpersandEqual, DoubleVertBarEqual,
     DoubleLess,
     DoubleGreater,
     DoubleAmpersand,
@@ -643,8 +706,8 @@ pub enum TokenType {
     Identifier,
 
     // Keywords
-    // REMEMBER TO FIX THE TESTS TOO!!!
-    // Class,
+    // Class, // im hesitant abt this one
+    // Struct,
     New,
     Any,
     Int,
@@ -660,6 +723,8 @@ pub enum TokenType {
     Else,
     For,
     While,
+    // Try,
+    // Catch,
     Return,
     Break,
     Continue,
@@ -789,7 +854,7 @@ c - d \\
     #[test]
     fn not_keywords() {
         let mut tester = Lexer::new(
-            "ints floats chars bools strings vars imports ass ins funcs ifs elses fors whiles returns breaks continues trues falses",
+            "ints floats chars bools strings vars imports ass ins funcs ifs elses fors whiles returns breaks continues trues falses"
         );
         for _ in 1..=19 {
             assert_eq!(tester.scan_token().kind, TokenType::Identifier);

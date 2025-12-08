@@ -1,19 +1,23 @@
 """
-Get      = obj: Expr | property: Token
-Slice    = sequence: Expr | query: Expr
-Logical  = left: Expr  | op: Token | right: Expr
+Assign      = assignee: Expr | op: Token | value: Expr
 """
 exprs = """
 Conditional = condition: Expr | if_true: Expr | if_false: Expr
+Boolean     = left: Expr  | op: Token | right: Expr
 Binary      = left: Expr  | op: Token | right: Expr
 Assign      = assignee: Expr | value: Expr
 Cast        = expr: Expr | new_type: ValueType
 Unary       = op: Token | target: Expr | prefix: bool
+Slice       = sequence: Expr | query: Expr
 Call        = callee: Expr | args: Vec<Expr>
+Method      = obj: Expr | method: Token | args: Vec<Expr>
+Get         = obj: Expr | property: Token
 Variable    = identifier: Token
 Literal     = repr: Token | val: Value
 """.strip()
 """
+Try         = try_block: Stmt | exception: Identifier | alias: Identifier | catch_block: Stmt
+Switch      = value: Expr | branches: Vec<(Expr, Stmt)>
 """
 stmts = """
 Function    = ret_type: ValueType | name: Token | params: Vec<(Token, ValueType)> | body: Vec<Stmt> | id: usize
@@ -27,18 +31,25 @@ For         = var: Token | sequence: Box<Expr> | body: Stmt
 Keyword     = keyword: Token | arg: Option<Box<Expr>>
 """.strip()
 
+str_if = lambda s, b: s if b else ""
 copied = "usize".split(",")
 
 def generate(name: str, desc: str, add_id = False):
-    desc = [l.split("=") for l in desc.split("\n")]
+    # remove comments
+    desc = [l[:l.index("//") if "//" in l else len(l)] for l in desc.split("\n")]
+    # split into variant & fields
+    desc = [l.split("=") for l in desc]
+    # split fields
     desc = [(l[0].strip(), l[1].split("|")) for l in desc]
+    # split each field into name and type
     desc = [(l[0], [[p.strip() for p in f.split(":")] for f in l[1]]) for l in desc]
-    desc = [(l[0], [f if name not in f[1] or f[1] == f"Vec<{name}>" else [f[0], f[1].replace(name, f"Box<{name}>")] for f in l[1]]) for l in desc]
-    desc = [(l[0], [f if f[1] not in [n[0] for n in desc] else [f[0], f"{name}::{f[1]}"] for f in l[1]]) for l in desc]
+    # add Box<> if a field is of the enum's type
+    desc = [(l[0], [f if name not in f[1] or f[1].startswith("Vec") else [f[0], f[1].replace(name, f"Box<{name}>")] for f in l[1]]) for l in desc]
     if add_id:
         desc = [(l[0], l[1] + [["id", "usize"]]) for l in desc]
-    # print("\n".join(map(str, desc)))
-    # return
+
+    # =================== ENUM ===================
+    # define the enum's variants
     print("#[derive(Debug)]")
     print(f"pub enum {name} {{")
     print( "    // TODO the commented-out ones")
@@ -52,9 +63,12 @@ def generate(name: str, desc: str, add_id = False):
     print("}")
     print()
 
+    # =================== IMPL ===================
+    # define .dummy() and .accept() for each of the enum's variants via `match`
+    # if the enum has an `id` field, return it from each variant
     print(f"impl<'me, 'vis> {name} where 'me: 'vis {{")
     print(f"    pub fn dummy() -> Self {{")
-    print(f"        Self::")
+    print(f"        Self::todo!()")
     print(f"    }}")
     print(f"    ")
     if add_id:
@@ -75,7 +89,7 @@ def generate(name: str, desc: str, add_id = False):
                 print(end=", ")
         print(f" }} =>\n{" "*16}visitor.visit_{node[0].lower()}_{name.lower()}(",end="")
         for i, field in enumerate(node[1]):
-            print(f"{"*" if field[1] in copied else ""}{field[0]}", end="")
+            print(f"{str_if("*", field[1] in copied)}{field[0]}", end="")
             if i < len(node[1]) - 1:
                 print(end=", ")
         print("),")
@@ -84,12 +98,14 @@ def generate(name: str, desc: str, add_id = False):
     print("}")
     print()
 
+    # =================== VISITOR ===================
+    # define a visitor for the enum & its methods
     visname = f"{name}Visitor"
     print(f"pub trait {visname}<'ast, T> {{")
     for node in desc:
         print(f"    fn visit_{node[0].lower()}_{name.lower()}(&mut self,\n", end=" "*8)
         for i, field in enumerate(node[1]):
-            print(f"{field[0]}: {"" if field[1] in copied else "&'ast "}{field[1]}", end="")
+            print(f"{field[0]}: {str_if("&'ast ", field[1] not in copied)}{field[1]}", end="")
             if i < len(node[1]) - 1:
                 print(end=", ")
         print(f") -> T;")
@@ -97,11 +113,11 @@ def generate(name: str, desc: str, add_id = False):
 
 import sys
 
-# tree_to_generate = "stmt"
 tree_to_generate = sys.argv[1].lower()
 
 print("use crate::lexing::Token;")
 print("use crate::values::*;")
+print("use crate::types::*;")
 if tree_to_generate == "stmt":
     print("use crate::expr_ast::Expr;")
     print()

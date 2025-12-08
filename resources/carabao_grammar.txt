@@ -1,0 +1,79 @@
+// Notation guide:
+// <abc> is a non-terminal named 'abc'
+// "abc" is specifically the characters "abc"
+// Inside strings (above), there may be escaped characters (\n == newline, \" == a double quote, etc)
+// r"[a-z]" is a regex expression (in this case, a single lowercase letter)
+// Inside a regex expression, backslashes are part of regex
+// () are for grouping units, mainly for applying suffixes
+// Suffixes '+', '*', and '?' have their regex meanings
+// Whitespace between units are ignored
+// Comments are c-style (like this one)
+
+<declaration> = <function_stmt>
+              | <var_stmt>
+              | <summon_stmt>
+              | <statement>
+
+<function_stmt>    = "func" <identifier> "(" <param>? ("," <param>)* ")" (":" type)? <block_stmt>
+<param> = <type> <identifier>
+<var_stmt>         = "new" <type>? <identifier> ("=" <expression>)?
+<summon_stmt>      = "summon" <identifier> ("." identifier)* ("as" <identifier>)?
+
+<statement>   = <block_stmt>
+              | <if_stmt>
+              | <while_stmt>
+              | <for_stmt>
+              | <keyword_stmt>
+              | <expression_stmt>
+
+<block_stmt>       = "{" <declaration>* "}"
+<if_stmt>          = "if" <expression> <condition_delim> <statement> ("else" <statement>)?
+<while_stmt>       = "while" <expression> <condition_delim> <statement>
+<for_stmt>         = "for" <identifier> "in" <expression> <condition_delim> <statement>
+    <condition_delim> = ":" | "\n" | /* nothing if following <statement> is <block_stmt> */
+<keyword_stmt>     = ("return" | "break" | "continue") <expression>? <stmt_end>
+<expression_stmt>  = <expression> <stmt_end>
+    <stmt_end> = "\n" | ";"
+
+<type> = "any"
+       | "int"
+       | "bool"
+       | "float"
+       | "char"
+       | "string"
+       | "func" "(" <type>? ("," <type>) ")" (":" <type>)?
+       // example: sqrt would be func(float): float
+
+<expression> = <conditional>
+             | <binary>
+             | <assign>
+             | <cast>
+             | <unary>
+             | <call>
+             | <variable>
+             | <literal>
+             | "(" <expression> ")"
+
+<conditional> = <expression> "?" <expression> ":" <expression>
+<binary>      = <expression> <binary_op> <expression>
+    <binary_op> = /* the same ones C has. im too lazy to write them all out */
+<assign>      = <variable> "=" <expression>
+<cast>        = <expression> "as" <type>
+<unary>       = <unary_op> <expression>
+    <unary_op> = "!" | "~" | "-"
+<call>        = <expression> "(" <expression> ")"
+<variable>    = <identifier>
+<literal>     = "true"
+              | "false"
+              | "none"
+              | <integer>
+              | <float>
+              | <char>
+              | <string>
+<integer> = r"\d+|0x[\da-fA-F]+|0b[01]+" // decimal (23), hex (0x7F), or binary (0b1101)
+<float>   = r"\d+\.\d+"
+<char>    = "'" r"[^'\\]|\\." "'"
+<string>  = "\"" r".*?" "\""
+          | "\"\"\"" r"[.\n]*?" "\"\"\""
+
+<identifier> = r"[_a-zA-Z][_a-zA-Z0-9]*"

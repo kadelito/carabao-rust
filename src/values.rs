@@ -1,6 +1,7 @@
-use std::{any::Any, collections::{HashMap, HashSet}, fmt::Display, rc::Rc};
+use std::{any::Any, collections::{HashMap, HashSet}, fmt::{Debug, Display, Write}, rc::Rc};
 
 use crate::lexing::{Token, TokenType};
+use crate::types::*;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Value {
@@ -15,23 +16,46 @@ pub enum Value {
     None,
 }
 
-impl From<String> for Value {
-    fn from(value: String) -> Self {
-        Self::Object(Rc::new(Object::String(value)))
+// pub enum TypedValue {
+//     Int(i64),
+//     Float(f64),
+//     Char(char),
+//     Bool(bool),
+//     // Note that .clone is on the REFERENCE of the object
+//     // PartialEq compares object values, though
+//     Object(Rc<Object>),
+//     None,
+// }
+
+impl Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::Any(value) => Display::fmt(&value, f),
+            Value::Int(i) => f.write_str(&i.to_string()),
+            Value::Float(flt) => f.write_str(&flt.to_string()),
+            Value::Char(c) => f.write_char(*c),
+            Value::Bool(b) => f.write_str(if *b { "true" } else { "false" }),
+            Value::Object(object) => std::fmt::Display::fmt(&object, f),
+            Value::None => f.write_str("none")
+        }
     }
 }
 
-impl ToString for Value {
-    fn to_string(&self) -> String {
-        match self {
-            Value::Any(val) => format!("<Any {:?}>", val),
-            Value::Int(i) => i.to_string(),
-            Value::Float(f) => f.to_string(),
-            Value::Char(c) => c.to_string(),
-            Value::Bool(b) => b.to_string(),
-            Value::Object(o) => o.to_string(),
-            Value::None => "none".to_owned(),
-        }
+impl From<String> for Value {
+    fn from(value: String) -> Self {
+        Self::from(Object::String(value))
+    }
+}
+
+impl From<NativeFunction> for Value {
+    fn from(value: NativeFunction) -> Self {
+        Self::from(Object::NativeFunc(value))
+    }
+}
+
+impl From<Object> for Value {
+    fn from(value: Object) -> Self {
+        Self::Object(Rc::new(value))
     }
 }
 
@@ -43,12 +67,7 @@ impl Value {
             Value::Float(_) => ValueType::Float,
             Value::Char(_) => ValueType::Char,
             Value::Bool(_) => ValueType::Bool,
-            Value::Object(obj) => ValueType::Object(match &**obj {
-                                                            // rust i swear to god
-                Object::String(_) => ObjectType::String,
-                Object::Function(Function { params, ret_type, ..  }) => 
-                    ObjectType::Function { ret_type: Box::new(ret_type.clone()), params: params.clone(), },
-            }),
+            Value::Object(obj) => ValueType::Object(obj.get_obj_type()),
             Value::None => ValueType::None,
         }
     }
@@ -104,118 +123,54 @@ impl Value {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
-pub enum ValueType {
-    Any,
-    Int,
-    Float,
-    Char,
-    Bool,
-    Object(ObjectType),
-    None,
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub enum ObjectType {
-    String,
-    /// this is just generics all over again
-    Function { ret_type: Box<ValueType>, params: Box<[ValueType]> },
-}
-
-impl Display for ValueType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Self::Object(obj_type) = self {
-            obj_type.fmt(f)
-        } else {
-            f.write_str(match self {
-                ValueType::Any => "any",
-                ValueType::Int => "int",
-                ValueType::Float => "float",
-                ValueType::Char => "char",
-                ValueType::Bool => "bool",
-                ValueType::Object(_) => "",
-                ValueType::None => "none",
-            })
-        }
-    }
-}
-
-impl Display for ObjectType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            ObjectType::String => "string",
-            ObjectType::Function { .. } => "func",
-        })
-    }
-}
-
-impl ValueType {
-    pub fn from(value: TokenType) -> Option<Self> {
-        match value {
-            TokenType::Any => Some(Self::Any),
-            TokenType::Int => Some(Self::Int),
-            TokenType::Float => Some(Self::Float),
-            TokenType::Char => Some(Self::Char),
-            TokenType::Bool => Some(Self::Bool),
-            TokenType::String => Some(Self::Object(ObjectType::String)),
-            TokenType::None => Some(Self::None),
-            _ => None,
-        }
-    }
-
-    pub fn can_cast(to: &ValueType, from: &ValueType) -> bool {
-        if to == from
-            || *to == Self::Any {
-            true
-        } else {
-            match (from, to) {
-                _ => todo!()
-            }
-        }
-    }
-
-    pub fn coerce_binary(type1: &ValueType, type2: &ValueType) -> Option<(ValueType, ValueType)> {
-        if type1 == type2 {
-            // Already the same type
-            Some((type1.clone(), (type2.clone())))
-        } else if [type1, type2].contains(&&ValueType::Object(ObjectType::String)) {
-            // val1 is a string
-            Some((ValueType::Object(ObjectType::String), ValueType::Object(ObjectType::String)))
-        } else {
-            match (type1, type2) {
-                (ValueType::Int, ValueType::Float) => Some((ValueType::Float, ValueType::Float)),
-                (ValueType::Int, ValueType::Char) => Some((ValueType::Int, ValueType::Int)),
-                (ValueType::Float, ValueType::Int) => Some((ValueType::Float, ValueType::Float)),
-                (ValueType::Char, ValueType::Int) => Some((ValueType::Int, ValueType::Int)),
-                _ => None
-            }
-        }
-    }
-
-    pub fn func_type(ret_type: &ValueType, params: &Vec<(Token, ValueType)>) -> Self {
-        Self::Object(
-            ObjectType::Function {
-                ret_type: Box::new(ret_type.clone()),
-                params: params.iter()
-                    .map(|(_, tp)| tp.clone())
-                    .collect::<Vec<ValueType>>()
-                    .into_boxed_slice()
-            }
-        )
-    }
-}
-
 #[derive(Debug, PartialEq)]
 pub enum Object {
     String(String),
     Function(Function),
+    NativeFunc(NativeFunction),
+}
+
+impl Display for Object {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Object::String(s) => f.write_str(s),
+            Object::Function(function) => {
+                let Function { name, ret_type, .. } = function;
+                write!(f, "<func {name}(): {ret_type}>")
+            },
+            Object::NativeFunc(native) => {
+                let NativeFunction { name, ret_type, .. } = native;
+                write!(f, "<func {name}(): {ret_type}>")
+            }
+        }
+    }
 }
 
 impl Clone for Object {
     fn clone(&self) -> Self {
         match self {
-            Self::String(s) => Self::String(s.clone()),
-            Self::Function(_) => todo!(),
+            Object::String(s) => Self::String(s.clone()),
+            Object::Function(function) => todo!(),
+            Object::NativeFunc(native_function) => todo!(),
+        }
+    }
+}
+
+impl Object {
+    pub fn add(obj1: &Self, obj2: &Self) -> Option<Value> {
+        match (obj1, obj2) {
+            (Object::String(s1), Object::String(s2)) => Some(Value::from(s1.to_owned() + s2)),
+            _ => None,
+        }
+    }
+
+    pub fn get_obj_type(&self) -> ObjectType {
+        match self {
+            Object::String(_) => ObjectType::String,
+            Object::Function(Function { params, ret_type, ..  }) => 
+                ObjectType::Function { ret_type: Box::new(ret_type.clone()), params: params.clone(), },
+            Object::NativeFunc(NativeFunction { params, ret_type, .. }) => 
+                ObjectType::Function { ret_type: Box::new(ret_type.clone()), params: params.clone().into() },
         }
     }
 }
@@ -229,21 +184,10 @@ pub struct Function {
     pub code: Box<[u8]>
 }
 
-impl Object {
-    pub fn add(obj1: &Self, obj2: &Self) -> Option<Value> {
-        match (obj1, obj2) {
-            (Object::String(s1), Object::String(s2)) => Some(Value::from(s1.to_owned() + s2)),
-            _ => None,
-        }
-    }
-}
-
-impl ToString for Object {
-    fn to_string(&self) -> String {
-        match self {
-            Object::String(s) => s.to_owned(),
-            Object::Function(Function { name, ret_type,.. }) =>
-                format!("<func {}(): {}>", name.to_string(), ret_type)
-        }
-    }
+#[derive(Debug, PartialEq)]
+pub struct NativeFunction {
+    pub name: &'static str,
+    pub params: &'static [ValueType],
+    pub ret_type: ValueType,
+    pub func: fn(&[Value]) ->  Value,
 }

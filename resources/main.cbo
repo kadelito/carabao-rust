@@ -1,7 +1,21 @@
-{
-    new i = 0
-    while i < 5 {
-        return i = i + 1
+new i = 0
+while i < 3 {
+    new j = 0
+    while j < 3 {
+        new k = 0
+        while k < 3 {
+            // println("yes")
+            k = k + 1
+        }
+        j = j + 1
     }
-    return "end"
+    i = i + 1
 }
+
+// func fib(int n): int {
+//     if n <= 1: return n
+    
+//     return fib(n - 2) + fib(n - 1)
+// }
+
+// fib(30)

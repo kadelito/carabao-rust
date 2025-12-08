@@ -6,13 +6,19 @@ use std::{
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 
 use crate::{
-    analysis::{AnalysisResult, Binding}, debug::opcodes::disassemble, expr_ast::{Expr, ExprVisitor}, lexing::{Token, TokenType}, stmt_ast::{Stmt, StmtVisitor}, values::{Function, Object, ObjectType, Value, ValueType}
+    debug::opcodes::disassemble,
+    analysis::{AnalysisResult, Binding},
+    expr_ast::{Expr, ExprVisitor},
+    lexing::{Token, TokenType},
+    stmt_ast::{Stmt, StmtVisitor},
+    values::*,
+    types::*,
 };
 
 #[derive(Debug, TryFromPrimitive, IntoPrimitive)]
 #[repr(u8)]
 pub enum OpCode {
-    Pass = 0x80, // to avoid normal arguments being parsed as bytecode
+    Pass = 0x80,
     None,
     True,
     False,
@@ -27,6 +33,19 @@ pub enum OpCode {
     Jump, // [ip offset][byte 2 of short]
     JumpIfNot, // [ip offset][byte 2]
     Call, // # of arguments to parse
+    
+    // ========== Casts ==========
+    IntToFloat,
+    IntToBool,
+    CharToInt,
+    BoolToInt,
+    BoolToFloat,
+    WrapAny,
+    AnyToInt,
+    AnyToFloat,
+    AnyToBool,
+    AnyToChar,
+    AnyToString,
 
     // ========== Arithmetic operators ==========
 
@@ -63,36 +82,56 @@ pub enum OpCode {
     BoolNot,
     BoolAnd,
     BoolOr,
+
+    Crash,
 }
 
 /// Returns a function to run.
 pub fn generate(ast: &Vec<Stmt>, context: AnalysisResult) -> Function {
+    // All semantics-related restrictions are checked during analysis,
+    // so by this point, the program is expected to be valid.
+    // Expect to see lots of .unwrap()s and _ => panic!()s throughout.
     let AnalysisResult {
         bindings,
         bin_types,
         expr_types,
     } = context;
     let mut generator = Generator {
-        var_counts: Vec::new(),
         bindings,
         bin_types,
         expr_types,
-        is_main: true,
         function: TempFunction::new(String::new(), Box::new([]), ValueType::Bool),
+        is_main: true,
+        var_counts: Vec::new(),
+        loop_starts: Vec::new(),
+        break_backlog: Vec::new(),
     };
     generator.var_counts.push(0);
     for stmt in ast {
         generator.code_stmt(stmt);
     }
+    generator.write_instr(OpCode::Return);
     Function::from(generator.function)
 }
 
 struct Generator {
+    // global
     bindings: HashMap<usize, Binding>,
     bin_types: HashMap<usize, ValueType>,
     expr_types: HashMap<usize, ValueType>,
     
+    // TODO replace with FunctionContext
     var_counts: Vec<u8>,
+    loop_starts: Vec<usize>, // byte indices
+    break_backlog: Vec<(usize, usize)>, // (index of jump, loop to break)
+    is_main: bool,
+    function: TempFunction,
+}
+
+struct FunctionContext {
+    var_counts: Vec<u8>,
+    loop_starts: Vec<usize>, // byte indices
+    break_backlog: Vec<(usize, i64)>, // jumps index & loops to break
     is_main: bool,
     function: TempFunction,
 }
@@ -174,8 +213,8 @@ impl Generator {
     
     /// Returns the index of the first byte in the new short.
     fn write_short(&mut self, short: u16) -> usize {
-        self.write_byte((short >> 8) as u8);   // most significant
-        self.write_byte((short & 0xff) as u8); // least significant
+        self.function.code.push((short >> 8) as u8);   // most significant
+        self.function.code.push((short & 0xff) as u8); // least significant
         self.function.code.len() - 2
     }
 
@@ -198,9 +237,9 @@ impl Generator {
         }
     }
 
-    fn write_jump_back(&mut self, jump_loc: usize) {
+    fn write_jump_back(&mut self, new_loc: usize) {
         //                                  current len + 1 instr byte + 2 arg bytes = 3 at time of jump
-        let offset = (jump_loc as isize) - (self.function.code.len() as isize + 3);
+        let offset = (new_loc as isize) - (self.function.code.len() as isize + 3);
         if i16::MIN as isize <= offset && offset <= i16::MAX as isize {
             self.write_instr(OpCode::Jump);
             self.write_short((offset as i16).cast_unsigned());
@@ -213,10 +252,37 @@ impl Generator {
         self.is_main && self.var_counts.len() == 1
     }
 
-    fn take_type(&mut self, expr: &Expr) -> ValueType {
+    fn take_expr_type(&mut self, expr: &Expr) -> ValueType {
         self.expr_types.remove(&expr.id())
             .expect("Expression type should be present")
     }
+
+    /// Tells `continue`s where to jump
+    fn begin_loop(&mut self, loop_start: usize) {
+        self.loop_starts.push(loop_start);
+    }
+
+    /// Uses the current length as the loop end index,
+    /// which is the 1st instruction after the loop body.
+    fn end_loop(&mut self) {
+        self.loop_starts.pop();
+        let loop_ended = self.loop_starts.len();
+        let mut backlog = self.break_backlog.clone();
+        backlog.retain(|(jump, loop_broken)|
+            if *loop_broken == loop_ended {
+                self.patch_jump_to_next(*jump);
+                false
+            } else {
+                true
+            }
+        );
+        self.break_backlog = backlog;
+    }
+}
+
+// helper for messing with the borrow checker
+fn take_vec<T>(vec: &mut Vec<T>) -> Vec<T> {
+    std::mem::replace(vec, Vec::new())
 }
 
 impl StmtVisitor<'_, ()> for Generator {
@@ -226,7 +292,7 @@ impl StmtVisitor<'_, ()> for Generator {
         name: &Token,
         params: &Vec<(Token, ValueType)>,
         body: &Vec<Stmt>,
-        id: usize,
+        _id: usize,
     ) -> () {
         use std::mem::replace;
 
@@ -239,7 +305,9 @@ impl StmtVisitor<'_, ()> for Generator {
             ret_type.clone());
 
         let old_func = replace(&mut self.function, new_func);
-        let old_counts = replace(&mut self.var_counts, Vec::new());
+        let old_counts = take_vec(&mut self.var_counts);
+        let old_loops = take_vec(&mut self.loop_starts);
+        let old_breaks = take_vec(&mut self.break_backlog);
         let old_status = self.is_main;
 
         self.is_main = false;
@@ -253,6 +321,8 @@ impl StmtVisitor<'_, ()> for Generator {
 
         self.function = old_func;
         self.var_counts = old_counts;
+        self.loop_starts = old_loops;
+        self.break_backlog = old_breaks;
         self.is_main = old_status;
         
         self.constant(&Value::Object(Rc::new(Object::Function(func))));
@@ -321,11 +391,13 @@ impl StmtVisitor<'_, ()> for Generator {
 
     fn visit_while_stmt(&mut self, condition: &Box<Expr>, body: &Box<Stmt>) -> () {
         let start = self.function.code.len();
+        self.begin_loop(start);
         self.code_expr(condition);
         let end = self.write_jump(OpCode::JumpIfNot);
         self.code_stmt(body);
         self.write_jump_back(start);
         self.patch_jump_to_next(end);
+        self.end_loop();
     }
 
     fn visit_for_stmt(
@@ -334,13 +406,54 @@ impl StmtVisitor<'_, ()> for Generator {
         sequence: &Box<Expr>,
         body: &Box<Stmt>,
     ) -> () {
-        todo!() // TODO
+        let start = self.function.code.len();
+        self.loop_starts.push(start);
+        // TODO
+        todo!();
+        self.loop_starts.pop();
     }
 
     fn visit_keyword_stmt(&mut self, keyword: &Token, arg: &Option<Box<Expr>>) -> () {
         match keyword.kind() {
-            TokenType::Break => todo!(), // TODO
-            TokenType::Continue => todo!(), // TODO
+            TokenType::Break => {
+                let mut loops_to_jump = 1;
+                if let Some(arg) = arg {
+                    // we already know this is a valid integer
+                    let Expr::Literal { val, .. } = &**arg else { panic!() };
+                    let Value::Int(i) = val else { panic!() };
+                    loops_to_jump = *i as usize;
+                }
+                let jump = self.write_jump(OpCode::Jump);
+                let index_of_loop_broken = self.loop_starts.len() - loops_to_jump;
+                /* Consider:
+                while x { // loop 0
+                    while y { // loop 1
+                        while z { // loop 2
+                            // The "loop depth" at this point is 3.
+                            // This break statement would jump to the end of loop (3 - 2 = 1).
+                            break 2
+                            break 1 // to loop 3 - 1 = 2 end
+                            break 3 // to loop 3 - 3 = 0 end
+                        }
+                        // loop 2 end
+                    }
+                    // loop 1 end
+                }
+                // loop 0 end
+                 */
+                self.break_backlog.push((jump, index_of_loop_broken));
+            }
+            TokenType::Continue => {
+                let mut loops_to_jump = 1;
+                if let Some(arg) = arg {
+                    // we already know this is a valid integer
+                    let Expr::Literal { val, .. } = &**arg else { panic!() };
+                    let Value::Int(i) = val else { panic!() };
+                    loops_to_jump = *i as usize;
+                }
+                let nth_loop_start = self.loop_starts[self.loop_starts.len() - loops_to_jump];
+                self.write_jump_back(nth_loop_start);
+            }
             TokenType::Return => {
                 match arg {
                     Some(arg) => self.code_expr(arg),
@@ -354,7 +467,7 @@ impl StmtVisitor<'_, ()> for Generator {
 }
 
 impl ExprVisitor<'_, ()> for Generator {
-    fn visit_conditional_expr(&mut self, condition: &Box<Expr>, if_true: &Box<Expr>, if_false: &Box<Expr>, id: usize) -> () {
+    fn visit_conditional_expr(&mut self, condition: &Box<Expr>, if_true: &Box<Expr>, if_false: &Box<Expr>, _id: usize) -> () {
         self.code_expr(condition);
         let false_jump = self.write_jump(OpCode::JumpIfNot); // condition popped here
         self.code_expr(if_true);
@@ -368,12 +481,12 @@ impl ExprVisitor<'_, ()> for Generator {
         let both = self.bin_types.remove(&id).expect("Should have resolved types in binary");
         self.code_expr(left);
         // TODO cast if needed
-        if self.take_type(left) != both {
-            todo!()
+        if self.take_expr_type(left) != both {
+            todo!("coerce left operand")
         }
         self.code_expr(right);
-        if self.take_type(right) != both {
-            todo!()
+        if self.take_expr_type(right) != both {
+            todo!("coerce right operand")
         }
         
         match op.kind() {
@@ -434,44 +547,95 @@ impl ExprVisitor<'_, ()> for Generator {
                 TokenType::DoubleDot => todo!(), // TODO
                 _ => panic!("Invalid operator made it to codegen")
             },
-            ValueType::Char => todo!(), // TODO
-            ValueType::Bool => match op.kind() {
-                TokenType::DoubleAmpersand => self.write_instr(OpCode::BoolAnd),
-                TokenType::DoubleVertBar => self.write_instr(OpCode::BoolOr),
-                _ => panic!("Invalid operator made it to codegen")
-            }
+            ValueType::Bool => panic!("Boolean operands should be in Expr::Logical"),
             ValueType::Object(obj_type) => match obj_type {
-                ObjectType::String => todo!(), // TODO
+                ObjectType::String => match op.kind() {
+                    TokenType::Less => self.write_instr(OpCode::FloatLess),
+                    TokenType::Greater => self.write_instr(OpCode::FloatGreater),
+                    TokenType::GreaterEqual => {
+                        self.write_instr(OpCode::FloatLess);
+                        self.write_instr(OpCode::BoolNot);
+                    },
+                    TokenType::LessEqual => {
+                        self.write_instr(OpCode::FloatGreater);
+                        self.write_instr(OpCode::BoolNot);
+                    },
+                    _ => panic!("Invalid operator made it to codegen")
+                }
                 _ => panic!("Invalid type made it to codegen")
             },
-            ValueType::None => panic!("Invalid type made it to codegen")
+            _ => panic!("Invalid type made it to codegen")
         }
     }
 
-    fn visit_assign_expr(&mut self, _assignee: &Box<Expr>, value: &Box<Expr>, id: usize) -> () {
+    fn visit_assign_expr(&mut self, assignee: &Box<Expr>, value: &Box<Expr>, id: usize) -> () {
         // TODO other valid assignees (get, index)
+        // DO NOT EVALUATE ASSIGNEE DIRECTLY!!!
         self.code_expr(value);
-        let loc = self.bindings.get(&id).expect("Assign expr should be bound.");
-        match loc.clone() {
-            Binding::Stack(index) => {
-                self.write_instr(OpCode::SetLocal);
-                self.write_byte(index as u8);
-            },
-            Binding::Globals(index) => {
-                self.write_instr(OpCode::SetGlobal);
-                self.write_byte(index as u8);
-            },
+        match &**assignee {
+            Expr::Slice { sequence, query, .. } => {
+                self.code_expr(sequence);
+                self.code_expr(query);
+                todo!()
+            }
+            Expr::Get { obj, id, .. } => {
+                self.code_expr(obj);
+                todo!()
+            }
+            Expr::Variable { .. } => {
+                let loc = self.bindings.get(&id).expect("Assign expr should be bound.");
+                match loc.clone() {
+                    Binding::Stack(index) => {
+                        self.write_instr(OpCode::SetLocal);
+                        self.write_byte(index as u8);
+                    },
+                    Binding::Globals(index) => {
+                        self.write_instr(OpCode::SetGlobal);
+                        self.write_byte(index as u8);
+                    },
+                }
+            }
+            _ => panic!("Invalid assign target made it to codegen")
         }
     }
 
     fn visit_cast_expr(&mut self,
         expr: &Box<Expr>, new_type: &ValueType, id: usize) -> () {
-        todo!() // TODO
+        self.code_expr(expr);
+        let old_type = self.take_expr_type(expr);
+        if old_type == *new_type {
+            return;
+        }
+        let cast_byte = if old_type == ValueType::Any {
+            match new_type {
+                ValueType::Int => OpCode::AnyToInt,
+                ValueType::Float => OpCode::AnyToFloat,
+                ValueType::Char => OpCode::AnyToChar,
+                ValueType::Bool => OpCode::AnyToBool,
+                ValueType::Object(obj_type) => match obj_type {
+                    ObjectType::String => OpCode::AnyToString,
+                    _ => panic!("Invalid cast made it to codegen")
+                },
+                _ => panic!("Invalid cast made it to codegen")
+            }
+        } else if *new_type == ValueType::Any {
+            OpCode::WrapAny
+        } else {
+            match (&old_type, new_type) {
+                (ValueType::Int, ValueType::Float) => OpCode::IntToFloat,
+                (ValueType::Int, ValueType::Bool) => OpCode::IntToBool,
+                (ValueType::Char, ValueType::Int) => OpCode::CharToInt,
+                (ValueType::Bool, ValueType::Int) => OpCode::BoolToInt,
+                (ValueType::Bool, ValueType::Float) => OpCode::BoolToFloat,
+                _ => panic!("Invalid cast made it to codegen")
+            }
+        };
+        self.write_instr(cast_byte);
     }
 
     fn visit_unary_expr(&mut self, op: &Token, target: &Box<Expr>, prefix: &bool, id: usize) -> () {
         self.code_expr(target);
-        match self.take_type(target) {
+        match self.take_expr_type(target) {
             ValueType::Int => match op.kind() {
                 TokenType::Tilde => self.write_instr(OpCode::IntNot),
                 TokenType::Minus => self.write_instr(OpCode::IntNegate),
@@ -490,8 +654,13 @@ impl ExprVisitor<'_, ()> for Generator {
     }
 
     fn visit_call_expr(&mut self,
-        callee: &Box<Expr>, args: &Vec<Expr>, id: usize) -> () {
-        todo!() // TODO
+        callee: &Box<Expr>, args: &Vec<Expr>, _id: usize) -> () {
+        self.code_expr(callee);
+        for arg in args {
+            self.code_expr(arg);
+        }
+        self.write_instr(OpCode::Call);
+        self.write_byte(args.len() as u8);
     }
 
     fn visit_variable_expr(&mut self, _identifier: &Token, id: usize) -> () {
@@ -510,5 +679,31 @@ impl ExprVisitor<'_, ()> for Generator {
     fn visit_literal_expr(&mut self,
         repr: &Token, val: &Value, id: usize) -> () {
         self.constant(val);
+    }
+    
+    fn visit_boolean_expr(&mut self,
+        left: &'_ Box<Expr>, op: &'_ Token, right: &'_ Box<Expr>, id: usize) -> () {
+        self.code_expr(left);
+        self.code_expr(right);
+        match op.kind() {
+            TokenType::DoubleAmpersand => self.write_instr(OpCode::BoolAnd),
+            TokenType::DoubleVertBar => self.write_instr(OpCode::BoolOr),
+            _ => panic!("Invalid operator made it to codegen")
+        }
+    }
+    
+    fn visit_slice_expr(&mut self,
+        sequence: &'_ Box<Expr>, query: &'_ Box<Expr>, id: usize) -> () {
+        todo!()
+    }
+    
+    fn visit_method_expr(&mut self,
+        obj: &'_ Box<Expr>, method: &'_ Token, args: &'_ Vec<Expr>, id: usize) -> () {
+        todo!()
+    }
+    
+    fn visit_get_expr(&mut self,
+        obj: &'_ Box<Expr>, property: &'_ Token, id: usize) -> () {
+        todo!()
     }
 }

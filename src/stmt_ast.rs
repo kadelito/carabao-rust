@@ -1,5 +1,5 @@
 use crate::lexing::Token;
-use crate::values::*;
+use crate::types::*;
 use crate::expr_ast::Expr;
 
 #[derive(Debug)]

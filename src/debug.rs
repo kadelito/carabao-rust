@@ -4,9 +4,10 @@ use crate::expr_ast::*;
 use crate::lexing::*;
 use crate::values::*;
 use crate::stmt_ast::*;
+use crate::types::*;
 
 pub mod opcodes {
-    use crate::{codegen::OpCode, values::Function};
+    use crate::{codegen::OpCode, types::ValueType, values::Function};
 
     pub fn disassemble(func: &Function) {
         
@@ -35,7 +36,20 @@ pub mod opcodes {
                 | OpCode::Pop
                 | OpCode::Return
                 | OpCode::DefineGlobal
-                
+                | OpCode::Crash
+
+                | OpCode::IntToFloat
+                | OpCode::BoolToFloat
+                | OpCode::BoolToInt
+                | OpCode::CharToInt
+                | OpCode::IntToBool
+                | OpCode::WrapAny
+                | OpCode::AnyToInt
+                | OpCode::AnyToFloat
+                | OpCode::AnyToChar
+                | OpCode::AnyToBool
+                | OpCode::AnyToString
+
                 | OpCode::ValEqual
                 | OpCode::Concat
                 | OpCode::FloatAdd
@@ -63,13 +77,11 @@ pub mod opcodes {
                 | OpCode::BoolNot
                 | OpCode::BoolAnd
                 | OpCode::BoolOr => println!(),
-                
                 OpCode::Constant => {
                     let index = reader.byte() as usize;
                     let con = reader.func.constants.get(index).unwrap();
                     println!("{con:?}");
                 }
-
                 OpCode::GetLocal
                 | OpCode::SetLocal
                 | OpCode::GetGlobal
@@ -78,7 +90,6 @@ pub mod opcodes {
                     let b= reader.byte();
                     println!("{b:02}");
                 }
-                
                 OpCode::Jump
                 | OpCode::JumpIfNot => {
                     // cast to i16 recovers sign of encoded signed short
@@ -248,6 +259,40 @@ impl ExprVisitor<'_, String> for AstPrinter {
     
     fn visit_cast_expr(&mut self, expr: &Box<Expr>, new_type: &ValueType, _id: usize) -> String {
         format!("{} as {:?}", self.to_str(expr), new_type)
+    }
+    
+    fn visit_boolean_expr(&mut self,
+        left: &'_ Box<Expr>, op: &'_ Token, right: &'_ Box<Expr>, _id: usize) -> String {
+        format!("{} {} {}",
+            self.to_str(left),
+            op.to_string(),
+            self.to_str(right),
+        )
+    }
+    
+    fn visit_slice_expr(&mut self,
+        sequence: &'_ Box<Expr>, query: &'_ Box<Expr>, _id: usize) -> String {
+        format!("{}[{}]", self.to_str(sequence), self.to_str(query))
+    }
+    
+    fn visit_method_expr(&mut self,
+        obj: &'_ Box<Expr>, method: &'_ Token, args: &'_ Vec<Expr>, _id: usize) -> String {
+        format!("{}.{}({})",
+            self.to_str(obj),
+            method.lexeme().unwrap(),
+            args.iter()
+                .map(|expr| self.to_str(&expr))
+                .collect::<Vec<String>>()
+                .join(", ")
+        )
+    }
+    
+    fn visit_get_expr(&mut self,
+        obj: &'_ Box<Expr>, property: &'_ Token, _id: usize) -> String {
+        format!("{}.{}",
+            self.to_str(obj),
+            property.lexeme().unwrap()
+        )
     }
 }
 

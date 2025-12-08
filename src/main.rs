@@ -9,6 +9,8 @@ mod debug;
 mod values;
 mod analysis;
 mod codegen;
+mod builtins;
+mod types;
 
 use std::{env, fs, process};
 
@@ -28,42 +30,38 @@ fn main() -> Result<(), ProgramError> {
         },
     };
 
-    run(&config)?;
-
-    Ok(())
+    run(&config)
 }
 
 fn run(config: &Config) -> Result<(), ProgramError> {
     let contents = fs::read_to_string(&config.filepath)
         .map_err(|_e| ProgramError::IOError)?;
 
-    vm::interpret(&contents)?;
-    // TODO 0x4B444C54
-    // TODO or TERRACE || 0x54455252414345
-    
-    Ok(())
+    vm::interpret(&contents)
 }
 
 #[derive(Debug)]
 pub enum ProgramError {
     IOError,
-    ParseError(ParseError),
+    ParseError(Vec<ParseError>),
     DebugError(DebugRuntimeError),
-    UsageError,
+    UsageError(Vec<UsageError>),
     RuntimeError(RuntimeError),
 }
 
 #[derive(Debug)]
-pub struct Config<> {
+pub struct Config {
     filepath: String
 }
 
 impl Config {
-    fn build(mut args: Vec<String>) -> Result<Config, String> {
-        if args.len() < 2 {
+    fn build(mut program_args: Vec<String>) -> Result<Config, String> {
+        // TODO TERRACE aka 0x54455252414345
+
+        if program_args.len() < 2 {
             return Err("not enough arguments".to_string());
         }
-        let path = args.pop().unwrap();
+        let path = program_args.pop().unwrap();
 
         if !fs::exists(&path).expect("File existence failed!") {
             Err(format!("couldn't find file '{}'", path))
