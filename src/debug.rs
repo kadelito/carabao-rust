@@ -49,6 +49,7 @@ pub mod opcodes {
                 | OpCode::AnyToChar
                 | OpCode::AnyToBool
                 | OpCode::AnyToString
+                | OpCode::ToStringTEMP
 
                 | OpCode::ValEqual
                 | OpCode::Concat
@@ -102,7 +103,7 @@ pub mod opcodes {
             /**/
         }
         
-        println!("======== {}() END ========", func.name);
+        println!("======== {} END ========", func.name);
     }
     
     struct Reader<'f> {
@@ -225,7 +226,7 @@ impl ExprVisitor<'_, String> for AstPrinter {
     fn visit_literal_expr(&mut self, _repr: &Token, val: &Value, _id: usize) -> String {
         if self.as_tree {
             format!("{}{:?}", ":   ".repeat(self.depth as usize), val)
-        } else if val.is_type(&ValueType::Object(ObjectType::String)) {
+        } else if val.is_type(&ValueType::String) {
             format!("\"{}\"", val.to_string())
         } else {
             format!("{}", val.to_string())
@@ -331,10 +332,10 @@ fn coerce_types(val1: Value, val2: Value) -> Result<(Value, Value), DebugRuntime
     if val1.is_type(&val2.get_type()) {
         // Already the same type
         Ok((val1, val2))
-    } else if let V::Object(obj) = &val1 && let Object::String(_) = **obj {
+    } else if let V::String(_) = val1 {
         // val1 is a string
         Ok((val1, V::from(val2.to_string())))
-    } else if let V::Object(obj) = &val2 && let Object::String(_) = **obj {
+    } else if let V::String(_) = val2 {
         // val2 is a string
         Ok((V::from(val1.to_string()), val2))
     } else {

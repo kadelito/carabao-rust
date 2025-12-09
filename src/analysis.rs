@@ -510,23 +510,21 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
                     ValueType::Bool
                 }
             },
-            ValueType::Object(obj_type) => match obj_type {
-                ObjectType::String => match op.kind() {
-                    TokenType::Plus => ValueType::Object(ObjectType::String),
-                    TokenType::Less
-                    | TokenType::Greater
-                    | TokenType::DoubleLess
-                    | TokenType::DoubleGreater
-                    | TokenType::GreaterEqual
-                    | TokenType::LessEqual => ValueType::Bool,
-                    TokenType::DoubleDot => todo!(), // TODO
-                    _ => {
-                        self.error_at_token(op, UsageError::InvalidOperator);
-                        ValueType::Object(ObjectType::String)
-                    }
-                },
-                ObjectType::Function { .. } => panic!("can't coerce to function??")
+            ValueType::String => match op.kind() {
+                TokenType::Plus => ValueType::String,
+                TokenType::Less
+                | TokenType::Greater
+                | TokenType::DoubleLess
+                | TokenType::DoubleGreater
+                | TokenType::GreaterEqual
+                | TokenType::LessEqual => ValueType::Bool,
+                TokenType::DoubleDot => todo!(), // TODO
+                _ => {
+                    self.error_at_token(op, UsageError::InvalidOperator);
+                    ValueType::String
+                }
             },
+            ValueType::Function { .. } => panic!("can't coerce to function??"),
             ValueType::None => {
                 self.error_at_token(op, UsageError::InvalidOperator);
                 // assume binary collapses to one value of same type
@@ -602,8 +600,7 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
 
     fn visit_call_expr(&mut self, callee: &Box<Expr>, args: &Vec<Expr>, _id: usize) -> ValueType {
         let callee_type = self.resolve_expr(&callee);
-        if let ValueType::Object(obj) = &callee_type
-            && let ObjectType::Function { ret_type, params } = obj
+        if let ValueType::Function { ret_type, params } = callee_type
         {
             let mut args_match = true;
             if args.len() != params.len() {

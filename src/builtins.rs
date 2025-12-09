@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use crate::values::{NativeFunction, Object, Value};
+use crate::values::{NativeFunction, Value};
 use crate::types::*;
 
 //

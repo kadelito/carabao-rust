@@ -46,6 +46,7 @@ pub enum OpCode {
     AnyToBool,
     AnyToChar,
     AnyToString,
+    ToStringTEMP,
 
     // ========== Arithmetic operators ==========
 
@@ -314,7 +315,10 @@ impl StmtVisitor<'_, ()> for Generator {
         for stmt in body {
             self.code_stmt(stmt);
         }
-        self.write_instr(OpCode::None);
+        // Return a dummy value from each type
+        // TODO ensure all control flow paths return a valid value instead
+        let dummy = ValueType::dummy(&self.function.ret_type);
+        self.constant(&dummy);
         self.write_instr(OpCode::Return);
 
         let func = Function::from(replace(&mut self.function, TempFunction::dummy()));
@@ -325,7 +329,9 @@ impl StmtVisitor<'_, ()> for Generator {
         self.break_backlog = old_breaks;
         self.is_main = old_status;
         
-        self.constant(&Value::Object(Rc::new(Object::Function(func))));
+        // Store new function in the heap and register
+        // a pointer to it in the outer function's constants
+        self.constant(&Value::Function(Rc::new(func)));
         if self.in_global_scope() {
             self.write_instr(OpCode::DefineGlobal);
         }
@@ -548,22 +554,19 @@ impl ExprVisitor<'_, ()> for Generator {
                 _ => panic!("Invalid operator made it to codegen")
             },
             ValueType::Bool => panic!("Boolean operands should be in Expr::Logical"),
-            ValueType::Object(obj_type) => match obj_type {
-                ObjectType::String => match op.kind() {
-                    TokenType::Less => self.write_instr(OpCode::FloatLess),
-                    TokenType::Greater => self.write_instr(OpCode::FloatGreater),
-                    TokenType::GreaterEqual => {
-                        self.write_instr(OpCode::FloatLess);
-                        self.write_instr(OpCode::BoolNot);
-                    },
-                    TokenType::LessEqual => {
-                        self.write_instr(OpCode::FloatGreater);
-                        self.write_instr(OpCode::BoolNot);
-                    },
-                    _ => panic!("Invalid operator made it to codegen")
-                }
-                _ => panic!("Invalid type made it to codegen")
-            },
+            ValueType::String => match op.kind() {
+                TokenType::Less => self.write_instr(OpCode::FloatLess),
+                TokenType::Greater => self.write_instr(OpCode::FloatGreater),
+                TokenType::GreaterEqual => {
+                    self.write_instr(OpCode::FloatLess);
+                    self.write_instr(OpCode::BoolNot);
+                },
+                TokenType::LessEqual => {
+                    self.write_instr(OpCode::FloatGreater);
+                    self.write_instr(OpCode::BoolNot);
+                },
+                _ => panic!("Invalid operator made it to codegen")
+            }
             _ => panic!("Invalid type made it to codegen")
         }
     }
@@ -612,10 +615,7 @@ impl ExprVisitor<'_, ()> for Generator {
                 ValueType::Float => OpCode::AnyToFloat,
                 ValueType::Char => OpCode::AnyToChar,
                 ValueType::Bool => OpCode::AnyToBool,
-                ValueType::Object(obj_type) => match obj_type {
-                    ObjectType::String => OpCode::AnyToString,
-                    _ => panic!("Invalid cast made it to codegen")
-                },
+                ValueType::String => OpCode::AnyToString,
                 _ => panic!("Invalid cast made it to codegen")
             }
         } else if *new_type == ValueType::Any {

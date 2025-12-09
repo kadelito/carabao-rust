@@ -1,13 +1,12 @@
+use std::rc::Rc;
+
 use crate::analysis::analyze;
 use crate::builtins::GLOBAL_FUNCS;
-use crate::codegen::OpCode;
-use crate::codegen::generate;
+use crate::codegen::*;
 use crate::parsing::Parser;
 use crate::ProgramError;
-use crate::values::Function;
-use crate::values::NativeFunction;
-use crate::values::Object;
-use crate::values::Value;
+use crate::types::ValueType;
+use crate::values::*;
 
 pub fn interpret(src: &str) -> Result<(), ProgramError> {
 
@@ -39,14 +38,14 @@ struct VM {
 }
 
 struct Frame {
-    function: Function,
+    function: Rc<Function>,
     ip: usize,
     stack_bottom: usize,
 }
 
 impl Frame {
     fn new(function: Function, stack_bottom: usize) -> Self {
-        Self { function, ip: 0, stack_bottom }
+        Self { function: Rc::new(function), ip: 0, stack_bottom }
     }
 }
 
@@ -102,27 +101,26 @@ impl VM {
                     // stack top atp: [func,arg1...argN]
                     let num_args = self.read_byte() as usize;
                     let new_bottom = self.stack.len() - num_args - 1;
-                    let func = self.stack_peek(num_args);
-                    match func {
-                        Value::Object(object) => match object.as_ref() {
-                            Object::Function(function) => todo!(),
-                            Object::NativeFunc(function) => {
-                                let NativeFunction { func, .. } = function;
-                                let args = &self.stack[new_bottom + 1..];
-                                func(args);
-                            },
-                            _ => panic!()
-                        },
+                    match self.stack_peek(num_args) {
+                        Value::Function(function) => {
+                            self.call_stack.push(Frame { function, ip: 0, stack_bottom: new_bottom });
+                        }
+                        Value::NativeFunc(function) => {
+                            let NativeFunction { func, .. } = function.as_ref();
+                            let args = &self.stack[new_bottom + 1..];
+                            let result = func(args);
+                            self.stack.truncate(new_bottom);
+                            self.stack.push(result);
+                        }
                         _ => panic!()
                     }
-                    todo!();
                 }
                 OpCode::GetLocal => {
-                    let index = self.read_byte() as usize;
+                    let index = self.top_frame().stack_bottom + self.read_byte() as usize;
                     self.stack.push(self.stack[index].clone());
                 }
                 OpCode::SetLocal => {
-                    let index = self.read_byte() as usize;
+                    let index = self.top_frame().stack_bottom + self.read_byte() as usize;
                     self.stack[index] = self.stack_peek(0);
                 }
                 OpCode::GetGlobal => {
@@ -149,7 +147,7 @@ impl VM {
                     if self.call_stack.len() == 1 {
                         return Ok(());
                     } else {
-        
+                        self.call_stack.pop();
                     }
                 }
                 OpCode::IntToFloat => {
@@ -174,13 +172,15 @@ impl VM {
                 OpCode::AnyToBool => todo!(),
                 OpCode::AnyToChar => todo!(),
                 OpCode::AnyToString => todo!(),
+                OpCode::ToStringTEMP => {
+                    let val = self.stack_pop();
+                    self.stack.push(format!("{}", val).into());
+                }
                 OpCode::ValEqual => self.binary_val(|a, b| Value::Bool(a == b)),
                 OpCode::Concat => {
-                    let Value::Object(obj1) = self.stack_pop() else { panic!() };
-                    let Object::String(s1) = (*obj1).clone() else { panic!() };
-                    let Value::Object(obj2) = self.stack_pop() else { panic!() };
-                    let Object::String(s2) = obj2.as_ref() else { panic!() };
-                    self.stack.push(Value::from(s1 + s2));
+                    let Value::String(s1) = self.stack_pop() else { panic!() };
+                    let Value::String(s2) = self.stack_pop() else { panic!() };
+                    self.stack.push(Value::from((*s1).clone() + s2.as_ref()));
                     println!("{}", 1 as u8)
                 }
                 OpCode::FloatAdd => self.binary_float(|a, b| Value::Float(a + b)),
@@ -231,7 +231,7 @@ impl VM {
                 OpCode::Crash => return Err(self.runtime_error(RuntimeError::ManualCrash)),
             }
             #[cfg(feature = "debug")] {
-                // println!("\tS={:?}<-", self.stack);
+                println!("\tS={:?}<-", self.stack);
                 // println!("\tG={:?}", self.globals);
             }
         }
@@ -246,10 +246,13 @@ impl VM {
         self.stack.pop().expect("Stack should not be empty.")
     }
 
+    /// Clones the value on the stack at `dist` from the end.
     fn stack_peek(&self, dist: usize) -> Value {
         self.stack.get(self.stack.len() - dist - 1).unwrap().clone()
     }
 
+    /// Pops an `Any` value from the stack, returning the wrapped value.
+    /// Panics if the top value was not of type `Any`.
     fn pop_any(&mut self) -> Value {
         if let Value::Any(v) = self.stack_pop() { *v }
         else { panic!() }
@@ -261,11 +264,16 @@ impl VM {
         self.stack.push(func(a, b));
     }
 
+
+    /// Pops a `Float` value from the stack, returning the primitive value.
+    /// Panics if the top value was not of type `Float`.
     fn pop_float(&mut self) -> f64 {
         if let Value::Float(f) = self.stack_pop() { f }
         else { panic!() }
     }
 
+    /// Pops a `Int` value from the stack, returning the primitive value.
+    /// Panics if the top value was not of type `Int`.
     fn binary_int(&mut self, func: fn(i64, i64) -> Value) {
         let b = self.pop_int();
         let a = self.pop_int();

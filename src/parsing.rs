@@ -80,9 +80,8 @@ impl<'a> Parser<'a> {
             self.function_def()
         } else if self.try_consume(TokenType::New) {
             self.var_def()
-        // TODO actually implement import
-        // } else if self.try_consume(TokenType::Summon) {
-        //     self.import()
+        } else if self.try_consume(TokenType::Summon) {
+            self.import()
         } else {
             self.statement()
         };
@@ -713,7 +712,7 @@ impl<'a> Parser<'a> {
 
             let ret_type = Box::new(ret_type);
             let params = params.into_boxed_slice();
-            ValueType::Object(ObjectType::Function { ret_type, params })
+            ValueType::Function { ret_type, params }
         } else {
             self.error_at_next(ParseError::NoValueType);
             ValueType::None
