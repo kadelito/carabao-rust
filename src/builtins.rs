@@ -26,6 +26,7 @@ pub fn print_native(args: &[Value]) -> Value {
     Value::None
 }
 
-pub fn println_native(_args: &[Value]) -> Value {
+pub fn println_native(args: &[Value]) -> Value {
+    print!("{}\n", args[0]);
     Value::None
 }

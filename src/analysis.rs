@@ -252,7 +252,7 @@ impl<'ast> FunctionResolver<'ast> {
 
     /// Returns the type of the given expression.
     fn expect_resolved_type(&mut self, expected: &ValueType, actual: &Expr, actual_type: ValueType) -> ValueType {
-        if ValueType::can_convert_type(expected, &actual_type) {
+        if !ValueType::can_convert_type(expected, &actual_type) {
             self.error_msg_at_expr(
                 &actual,
                 UsageError::TypeError,
