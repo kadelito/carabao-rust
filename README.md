@@ -1,7 +1,7 @@
 # Carabao
 
 Carabao is a statically-typed scripting language I designed
-to make easy things easy.
+to make easy things easy. This readme is unfinished at this time.
 
 ## Installation
 
