@@ -72,3 +72,13 @@ impl Config {
         }
     }
 }
+
+#[cfg(test)]
+mod main_tests {
+    use super::*;
+
+    #[test]
+    fn hello_world() {
+
+    }
+}

@@ -1,6 +1,6 @@
-use std::{any::Any, collections::{HashMap, HashSet}, fmt::{Debug, Display, Write}, rc::Rc};
+use std::{any::Any, collections::{HashMap, HashSet}, fmt::{Debug, Display, Write}, rc::Rc, u32};
 
-use crate::lexing::{Token, TokenType};
+use crate::{codegen::LineRLE, lexing::{Token, TokenType}};
 use crate::types::*;
 
 #[derive(Debug, PartialEq, Clone)]
@@ -18,16 +18,55 @@ pub enum Value {
     None,
 }
 
-// pub enum TypedValue {
-//     Int(i64),
-//     Float(f64),
-//     Char(char),
-//     Bool(bool),
-//     // Note that .clone is on the REFERENCE of the object
-//     // PartialEq compares object values, though
-//     Object(Rc<Object>),
-//     None,
-// }
+#[derive(PartialEq)]
+pub struct Function {
+    pub name: String,
+    pub params: Box<[ValueType]>,
+    pub ret_type: ValueType,
+    pub constants: Box<[Value]>,
+    pub code: Box<[u8]>,
+    pub lines: Box<[LineRLE]>
+}
+
+impl Function {
+    pub fn get_line(&self, index: usize) -> u32 {
+        if index == 0 {
+            return self.lines[0].line;
+        }
+
+        let mut bytes_passed: usize = 0;
+        for info in &self.lines {
+            bytes_passed += info.count as usize;
+            if bytes_passed > index {
+                return info.line;
+            }
+        }
+        if index >= bytes_passed {
+            u32::MAX
+        } else {
+            return self.lines.last().unwrap().line;
+        }
+    }
+}
+
+impl Debug for Function {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Function")
+            .field("name", &self.name)
+            .field("params", &self.params)
+            .field("ret_type", &self.ret_type)
+            .field("constants", &self.constants)
+            .finish()
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct NativeFunction {
+    pub name: &'static str,
+    pub params: &'static [ValueType],
+    pub ret_type: ValueType,
+    pub func: fn(&[Value]) ->  Value,
+}
 
 impl Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -88,21 +127,4 @@ impl Value {
         self.get_type() == *val_type
     }
 
-}
-
-#[derive(Debug, PartialEq)]
-pub struct Function {
-    pub name: String,
-    pub params: Box<[ValueType]>,
-    pub ret_type: ValueType,
-    pub constants: Box<[Value]>,
-    pub code: Box<[u8]>
-}
-
-#[derive(Debug, PartialEq)]
-pub struct NativeFunction {
-    pub name: &'static str,
-    pub params: &'static [ValueType],
-    pub ret_type: ValueType,
-    pub func: fn(&[Value]) ->  Value,
 }

@@ -1,3 +1,5 @@
+use std::fmt::format;
+use std::iter::Map;
 use std::rc::Rc;
 
 use crate::analysis::analyze;
@@ -31,10 +33,14 @@ pub fn run(function: Function) -> Result<(), ProgramError> {
 }
 
 struct VM {
-    // TODO call stack
     call_stack: Vec<Frame>,
     stack: Vec<Value>,
     globals: Vec<Value>,
+    // TODO cached summons
+    // modules: Map<std::path::Path, Value>
+
+    #[cfg(feature = "runtime_trace")]
+    prev_line: u32,
 }
 
 struct Frame {
@@ -64,6 +70,8 @@ impl VM {
             call_stack: Vec::with_capacity(64),
             stack: Vec::with_capacity(1024),
             globals: Vec::with_capacity(64),
+            #[cfg(feature = "runtime_trace")]
+            prev_line: 0
         };
         new.call_stack.push(Frame::new(function, 0));
         for (_, obj) in GLOBAL_FUNCS {
@@ -72,170 +80,216 @@ impl VM {
         new
     }
 
+    // TODO test mode, run_output accept_input
+    // #[cfg(test)]
+    // fn 
+
     fn run(&mut self) -> Result<(), ProgramError> {
-        loop {
-            let byte = self.read_instruction();
-            #[cfg(feature = "debug")] {
-                println!("{:04} Op::{:?}", self.top_frame().ip-1, byte.as_ref().unwrap_or(&OpCode::Pass));
-            }
-            let Some(instr) = byte else {
-                return Err(self.runtime_error(RuntimeError::InvalidCode));
+        while self.cycle()? {}
+        Ok(())
+    }
+
+    fn cycle(&mut self) -> Result<bool, ProgramError> {
+        let byte = self.read_instruction();
+        #[cfg(feature = "runtime_trace")]
+        {
+            let ip = self.top_frame().ip - 1;
+            let line = self.top_frame().function.get_line(ip);
+            let linestr: String = if line == self.prev_line {
+                "   :".into()
+            } else {
+                format!("{}",line)
             };
-            match instr {
-                OpCode::Pass => {}
-                OpCode::None => self.stack.push(Value::None),
-                OpCode::True => self.stack.push(Value::Bool(true)),
-                OpCode::False => self.stack.push(Value::Bool(false)),
-                OpCode::Jump => {
-                    let offset =  self.read_short() as i16;
+            println!("{linestr:>4} | {ip:04} Op::{:?}",
+                byte.as_ref().unwrap_or(&OpCode::Pass));
+            self.prev_line = line;
+        }
+        let Some(instr) = byte else {
+            return Err(self.runtime_error(RuntimeError::InvalidCode));
+        };
+        match instr {
+            OpCode::Pass => {}
+            OpCode::None => self.stack.push(Value::None),
+            OpCode::True => self.stack.push(Value::Bool(true)),
+            OpCode::False => self.stack.push(Value::Bool(false)),
+            OpCode::Jump => {
+                let offset =  self.read_short() as i16;
+                self.top_frame().ip = self.top_frame().ip.strict_add_signed(offset as isize);
+            }
+            OpCode::JumpIfNot => {
+                let b = self.pop_bool();
+                let offset =  self.read_short() as i16;
+                if !b {
                     self.top_frame().ip = self.top_frame().ip.strict_add_signed(offset as isize);
                 }
-                OpCode::JumpIfNot => {
-                    let b = self.pop_bool();
-                    let offset =  self.read_short() as i16;
-                    if !b {
-                        self.top_frame().ip = self.top_frame().ip.strict_add_signed(offset as isize);
-                    }
-                }
-                OpCode::Call => {
-                    // stack top atp: [func,arg1...argN]
-                    let num_args = self.read_byte() as usize;
-                    let new_bottom = self.stack.len() - num_args - 1;
-                    match self.stack_peek(num_args) {
-                        Value::Function(function) => {
-                            self.call_stack.push(Frame { function, ip: 0, stack_bottom: new_bottom });
-                        }
-                        Value::NativeFunc(function) => {
-                            let NativeFunction { func, .. } = function.as_ref();
-                            let args = &self.stack[new_bottom + 1..];
-                            let result = func(args);
-                            self.stack.truncate(new_bottom);
-                            self.stack.push(result);
-                        }
-                        _ => panic!()
-                    }
-                }
-                OpCode::GetLocal => {
-                    let index = self.top_frame().stack_bottom + self.read_byte() as usize;
-                    self.stack.push(self.stack[index].clone());
-                }
-                OpCode::SetLocal => {
-                    let index = self.top_frame().stack_bottom + self.read_byte() as usize;
-                    self.stack[index] = self.stack_peek(0);
-                }
-                OpCode::GetGlobal => {
-                    let index = self.read_byte() as usize;
-                    self.stack.push(self.globals[index].clone());
-                }
-                OpCode::SetGlobal => {
-                    let index = self.read_byte() as usize;
-                    self.globals[index] = self.stack_peek(0);
-                }
-                OpCode::DefineGlobal => {
-                    let new = self.stack_pop();
-                    self.globals.push(new);
-                }
-                OpCode::Constant => {
-                    let index = self.read_byte() as usize;
-                    let new = self.top_frame().function.constants[index].clone();
-                    self.stack.push(new);
-                }
-                OpCode::Pop => {
-                    self.stack.pop();
-                }
-                OpCode::Return => {
-                    if self.call_stack.len() == 1 {
-                        return Ok(());
-                    } else {
-                        self.call_stack.pop();
-                    }
-                }
-                OpCode::IntToFloat => {
-                    let f = self.pop_int() as f64;
-                    self.stack.push(Value::Float(f));
-                }
-                OpCode::IntToBool => todo!(),
-                OpCode::CharToInt => todo!(),
-                OpCode::BoolToInt => todo!(),
-                OpCode::BoolToFloat => todo!(),
-                OpCode::WrapAny => {
-                    let val = self.stack_pop();
-                    self.stack.push(Value::Any(Box::new(val)));
-                }
-                OpCode::AnyToInt => {
-                    let Value::Int(i) = self.pop_any() else {
-                        return Err(self.runtime_error(RuntimeError::TypeError));
-                    };
-                    self.stack.push(Value::Int(i));
-                }
-                OpCode::AnyToFloat => todo!(),
-                OpCode::AnyToBool => todo!(),
-                OpCode::AnyToChar => todo!(),
-                OpCode::AnyToString => todo!(),
-                OpCode::ToStringTEMP => {
-                    let val = self.stack_pop();
-                    self.stack.push(format!("{}", val).into());
-                }
-                OpCode::ValEqual => self.binary_val(|a, b| Value::Bool(a == b)),
-                OpCode::Concat => {
-                    let Value::String(s1) = self.stack_pop() else { panic!() };
-                    let Value::String(s2) = self.stack_pop() else { panic!() };
-                    self.stack.push(Value::from((*s1).clone() + s2.as_ref()));
-                    println!("{}", 1 as u8)
-                }
-                OpCode::FloatAdd => self.binary_float(|a, b| Value::Float(a + b)),
-                OpCode::FloatSub => self.binary_float(|a, b| Value::Float(a - b)),
-                OpCode::FloatMul => self.binary_float(|a, b| Value::Float(a * b)),
-                OpCode::FloatDiv => self.binary_float(|a, b| Value::Float(a / b)),
-                OpCode::FloatMod => self.binary_float(|a, b| Value::Float(a % b)),
-                OpCode::FloatNegate => {
-                    let f = self.pop_float();
-                    self.stack.push(Value::Float(-f));
-                }
-                OpCode::FloatLess => self.binary_float(|a, b| Value::Bool(a < b)),
-                OpCode::FloatGreater => self.binary_float(|a, b| Value::Bool(a > b)),
-                OpCode::IntAdd => self.binary_int(|a, b| Value::Int(a + b)),
-                OpCode::IntSub => self.binary_int(|a, b| Value::Int(a - b)),
-                OpCode::IntMul => self.binary_int(|a, b| Value::Int(a * b)),
-                OpCode::IntDiv => self.binary_int(|a, b| Value::Int(a / b)),
-                OpCode::IntMod => self.binary_int(|a, b| Value::Int(a % b)),
-                OpCode::IntAnd => self.binary_int(|a, b| Value::Int(a & b)),
-                OpCode::IntXor => self.binary_int(|a, b| Value::Int(a ^ b)),
-                OpCode::IntOr  => self.binary_int(|a, b| Value::Int(a | b)),
-                OpCode::IntShl => self.binary_int(|a, b| Value::Int(a << b)),
-                OpCode::IntShr => self.binary_int(|a, b| Value::Int(a >> b)),
-                OpCode::IntNegate => {
-                    let i = self.pop_int();
-                    self.stack.push(Value::Int(-i));
-                }
-                OpCode::IntNot => {
-                    let i = self.pop_int();
-                    self.stack.push(Value::Int(!i));
-                }
-                OpCode::IntLess => self.binary_int(|a, b| Value::Bool(a < b)),
-                OpCode::IntGreater => self.binary_int(|a, b| Value::Bool(a > b)),
-                OpCode::BoolAnd => {
-                    let b = self.pop_bool();
-                    let a = self.pop_bool();
-                    self.stack.push(Value::Bool(a && b));
-                }
-                OpCode::BoolOr => {
-                    let b = self.pop_bool();
-                    let a = self.pop_bool();
-                    self.stack.push(Value::Bool(a || b));
-                }
-                OpCode::BoolNot => {
-                    let b = self.pop_bool();
-                    self.stack.push(Value::Bool(!b));
-                }
-                OpCode::Crash => return Err(self.runtime_error(RuntimeError::ManualCrash)),
             }
-            #[cfg(feature = "debug")] {
-                println!("\tS={:?}<-", self.stack);
-                // println!("\tG={:?}", self.globals);
+            OpCode::SwapTop => {
+                let end = self.stack.len() - 1;
+                let index = end - self.read_byte() as usize;
+                self.stack.swap(index, end);
             }
+            OpCode::Call => {
+                // stack top atp: [func,arg1...argN]
+                let num_args = self.read_byte() as usize;
+                let new_bottom = self.stack.len() - num_args - 1;
+                match self.stack_peek(num_args) {
+                    Value::Function(function) => {
+                        #[cfg(feature = "runtime_trace")]
+                        {
+                            println!("\t-->--> Entering {}", function.name);
+                        }
+                        self.call_stack.push(Frame { function, ip: 0, stack_bottom: new_bottom });
+                    }
+                    Value::NativeFunc(function) => {
+                        let NativeFunction { func, .. } = function.as_ref();
+                        let args = &self.stack[new_bottom + 1..];
+                        let result = func(args);
+                        self.stack.truncate(new_bottom);
+                        self.stack.push(result);
+                    }
+                    _ => panic!()
+                }
+            }
+            OpCode::GetLocal => {
+                let index = self.top_frame().stack_bottom + self.read_byte() as usize;
+                self.stack.push(self.stack[index].clone());
+            }
+            OpCode::SetLocal => {
+                let index = self.top_frame().stack_bottom + self.read_byte() as usize;
+                self.stack[index] = self.stack_peek(0);
+            }
+            OpCode::GetGlobal => {
+                let index = self.read_byte() as usize;
+                self.stack.push(self.globals[index].clone());
+            }
+            OpCode::SetGlobal => {
+                let index = self.read_byte() as usize;
+                self.globals[index] = self.stack_peek(0);
+            }
+            OpCode::DefineGlobal => {
+                let new = self.stack_pop();
+                self.globals.push(new);
+            }
+            OpCode::Constant => {
+                let index = self.read_byte() as usize;
+                let new = self.top_frame().function.constants[index].clone();
+                self.stack.push(new);
+            }
+            OpCode::Pop => { self.stack.pop(); },
+            OpCode::Return => {
+                #[cfg(feature = "runtime_trace")]
+                {
+                    println!("\t<--<-- Exiting {}", self.top_frame().function.name);
+                }
+                if self.call_stack.len() == 1 {
+                    return Ok(false);
+                } else {
+                    let prev_frame = self.call_stack.pop().unwrap();
+                    let result = self.stack_pop();
+                    self.stack.truncate(prev_frame.stack_bottom);
+                    self.stack.push(result);
+                }
+            }
+            OpCode::IntToFloat => {
+                let f = self.pop_int() as f64;
+                self.stack.push(Value::Float(f));
+            }
+            OpCode::IntToBool => todo!(),
+            OpCode::CharToInt => todo!(),
+            OpCode::BoolToInt => todo!(),
+            OpCode::BoolToFloat => todo!(),
+            OpCode::WrapAny => {
+                let val = self.stack_pop();
+                self.stack.push(Value::Any(Box::new(val)));
+            }
+            OpCode::AnyToInt => {
+                let Value::Int(i) = self.pop_any() else {
+                    return Err(self.runtime_error(RuntimeError::TypeError));
+                };
+                self.stack.push(Value::Int(i));
+            }
+            OpCode::AnyToFloat => {
+                let Value::Float(v) = self.pop_any() else {
+                    return Err(self.runtime_error(RuntimeError::TypeError));
+                };
+                self.stack.push(Value::Float(v));
+            }
+            OpCode::AnyToBool => {
+                let Value::Bool(v) = self.pop_any() else {
+                    return Err(self.runtime_error(RuntimeError::TypeError));
+                };
+                self.stack.push(Value::Bool(v));
+            }
+            OpCode::AnyToChar => {
+                let Value::Char(v) = self.pop_any() else {
+                    return Err(self.runtime_error(RuntimeError::TypeError));
+                };
+                self.stack.push(Value::Char(v));
+            }
+            OpCode::AnyToString => {
+                let Value::String(v) = self.pop_any() else {
+                    return Err(self.runtime_error(RuntimeError::TypeError));
+                };
+                self.stack.push(Value::String(v));
+            }
+            OpCode::ToStringTEMP => {
+                let val = self.stack_pop();
+                self.stack.push(format!("{}", val).into());
+            }
+            OpCode::ValEqual => self.binary_val(|a, b| Value::Bool(a == b)),
+            OpCode::Concat => {
+                let Value::String(s2) = self.stack_pop() else { panic!() };
+                let Value::String(s1) = self.stack_pop() else { panic!() };
+                self.stack.push(Value::from((*s1).clone() + s2.as_ref()));
+            }
+            OpCode::FloatAdd => self.binary_float(|a, b| Value::Float(a + b)),
+            OpCode::FloatSub => self.binary_float(|a, b| Value::Float(a - b)),
+            OpCode::FloatMul => self.binary_float(|a, b| Value::Float(a * b)),
+            OpCode::FloatDiv => self.binary_float(|a, b| Value::Float(a / b)),
+            OpCode::FloatMod => self.binary_float(|a, b| Value::Float(a % b)),
+            OpCode::FloatNegate => {
+                let f = self.pop_float();
+                self.stack.push(Value::Float(-f));
+            }
+            OpCode::FloatLess => self.binary_float(|a, b| Value::Bool(a < b)),
+            OpCode::FloatGreater => self.binary_float(|a, b| Value::Bool(a > b)),
+            OpCode::IntAdd => self.binary_int(|a, b| Value::Int(a + b)),
+            OpCode::IntSub => self.binary_int(|a, b| Value::Int(a - b)),
+            OpCode::IntMul => self.binary_int(|a, b| Value::Int(a * b)),
+            OpCode::IntDiv => self.binary_int(|a, b| Value::Int(a / b)),
+            OpCode::IntMod => self.binary_int(|a, b| Value::Int(a % b)),
+            OpCode::IntAnd => self.binary_int(|a, b| Value::Int(a & b)),
+            OpCode::IntXor => self.binary_int(|a, b| Value::Int(a ^ b)),
+            OpCode::IntOr  => self.binary_int(|a, b| Value::Int(a | b)),
+            OpCode::IntShl => self.binary_int(|a, b| Value::Int(a << b)),
+            OpCode::IntShr => self.binary_int(|a, b| Value::Int(a >> b)),
+            OpCode::IntNegate => {
+                let i = self.pop_int();
+                self.stack.push(Value::Int(-i));
+            }
+            OpCode::IntNot => {
+                let i = self.pop_int();
+                self.stack.push(Value::Int(!i));
+            }
+            OpCode::IntLess => self.binary_int(|a, b| Value::Bool(a < b)),
+            OpCode::IntGreater => self.binary_int(|a, b| Value::Bool(a > b)),
+            OpCode::BoolNot => {
+                let b = self.pop_bool();
+                self.stack.push(Value::Bool(!b));
+            }
+            OpCode::Crash => return Err(self.runtime_error(RuntimeError::ManualCrash)),
         }
-        Ok(())
+        #[cfg(feature = "runtime_trace")]
+        {
+            let bottom = self.top_frame().stack_bottom;
+            println!("   : |\tS=[{}]<-", &self.stack[bottom..].iter()
+                .map(|v| format!("{}", v))
+                .collect::<Vec<String>>()
+                .join("] [")
+            );
+            // println!("\tG={:?}", self.globals);
+        }
+        Ok(true)
     }
 
     fn top_frame(&mut self) -> &mut Frame {

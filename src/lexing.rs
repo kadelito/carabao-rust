@@ -13,7 +13,7 @@ pub struct Lexer<'a> {
     chars: &'a [u8],
     cur: usize,
     start: usize,
-    line: usize,
+    line: u32,
 }
 
 impl<'a> Lexer<'a> {
@@ -525,7 +525,7 @@ impl<'a> Lexer<'a> {
 pub struct Token {
     kind: TokenType,
     pub lexeme: Option<String>,
-    line: usize,
+    line: u32,
     error: Option<TokenizationError>,
 }
 
@@ -545,7 +545,7 @@ impl Token {
         Token {
             kind: TokenType::Error,
             lexeme: None,
-            line: usize::MAX,
+            line: u32::MAX,
             error: Some(TokenizationError::EmptyToken)
         }
     }
@@ -570,7 +570,7 @@ impl Token {
         self.lexeme.as_ref()
     }
 
-    pub fn line(&self) -> usize {
+    pub fn line(&self) -> u32 {
         self.line
     }
 
@@ -741,7 +741,7 @@ pub enum TokenType {
 pub mod lexing_tests {
     use crate::lexing::*;
 
-    pub fn make_token(src: &str, line: usize) -> Token {
+    pub fn make_token(src: &str, line: u32) -> Token {
         let mut token = Lexer::new(src).scan_token();
         token.line = line;
         token

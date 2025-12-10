@@ -7,9 +7,12 @@ use crate::{
     types::*,
 };
 
+/**
+ * A parser for Carabao.
+ */
 pub struct Parser<'a> {
     source: Lexer<'a>,
-    /// The `token` to be consumed
+    /// The `token` to be consumed next.
     cur: Token,
     /// The `token` most recently consumed.
     ///
@@ -130,14 +133,14 @@ impl<'a> Parser<'a> {
     }
 
     fn var_def(&mut self) -> Stmt {
+        let var_type = self.try_consume_type();
         let name = self.expect_binding();
-        self.expect(TokenType::Equal);
-        let val = if !self.at_stmt_end() {
-            Some(Box::new(self.expression()))
+        let val = if self.try_consume(TokenType::Equal) {
+            Some(Box::new(self.expression(false)))
         } else {
             None
         };
-        Stmt::Var { name, val }
+        Stmt::Var { name, var_type, val }
     }
 
     fn import(&mut self) -> Stmt {
@@ -190,7 +193,7 @@ impl<'a> Parser<'a> {
     }
 
     fn if_stmt(&mut self) -> Stmt {
-        let condition = Box::new(self.expression());
+        let condition = Box::new(self.expression(false));
         let true_branch = if self.try_consume_any(&[TokenType::Newline, TokenType::Colon]) {
             self.statement()
         } else if self.try_consume(TokenType::OpenBrace) {
@@ -215,7 +218,7 @@ impl<'a> Parser<'a> {
     }
 
     fn while_loop(&mut self) -> Stmt {
-        let condition = Box::new(self.expression());
+        let condition = Box::new(self.expression(false));
         let body = if self.try_consume_any(&[TokenType::Newline, TokenType::Colon]) {
             self.statement()
         } else if self.try_consume(TokenType::OpenBrace) {
@@ -231,7 +234,7 @@ impl<'a> Parser<'a> {
     fn for_loop(&mut self) -> Stmt {
         let var = self.expect_binding();
         self.expect(TokenType::In);
-        let sequence = Box::new(self.expression());
+        let sequence = Box::new(self.expression(false));
         let body = if self.try_consume_any(&[TokenType::Newline, TokenType::Colon]) {
             self.statement()
         } else if self.try_consume(TokenType::OpenBrace) {
@@ -252,7 +255,7 @@ impl<'a> Parser<'a> {
     fn keyword_stmt(&mut self) -> Stmt {
         let keyword = self.take_prev();
         let arg = if !self.at_stmt_end() {
-            Some(Box::new(self.expression()))
+            Some(Box::new(self.expression(false)))
         } else {
             None
         };
@@ -261,7 +264,7 @@ impl<'a> Parser<'a> {
     }
 
     fn expression_stmt(&mut self) -> Stmt {
-        let expression = Box::new(self.expression());
+        let expression = Box::new(self.expression(false));
         self.expect_stmt_end();
         Stmt::Expression { expression }
     }
@@ -278,7 +281,7 @@ impl<'a> Parser<'a> {
         let lexer: Lexer<'_> = Lexer::new(&source);
         let mut parser = Parser::from(lexer);
         parser.advance();
-        let result = parser.expression();
+        let result = parser.expression(false);
         if !parser.errors.is_empty() {
             Err(parser.errors[0])
         } else {
@@ -287,9 +290,12 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn expression(&mut self) -> Expr {
+    fn expression(&mut self, ignore_newlines: bool) -> Expr {
         self.skip_newlines();
+        let old = self.ignore_newlines;
+        self.ignore_newlines = ignore_newlines;
         let expr = self.assign();
+        self.ignore_newlines = old;
         expr
     }
 
@@ -311,9 +317,9 @@ impl<'a> Parser<'a> {
         let mut expr = self.logic_or();
         if self.try_consume(TokenType::Question) {
             let left = Box::new(expr);
-            let middle = Box::new(self.expression());
+            let middle = Box::new(self.expression(true));
             self.expect_because(TokenType::Colon, ParseError::IncompleteTernary);
-            let right = Box::new(self.expression());
+            let right = Box::new(self.expression(false));
             expr = Expr::Conditional {
                 condition: left,
                 if_true: middle,
@@ -478,6 +484,7 @@ impl<'a> Parser<'a> {
     /// 
     /// All are suffixes and obv the same precedence, so they go together
     fn call_or_similar(&mut self) -> Expr {
+        // TODO named arguments
         let mut obj = self.primary();
         loop {
             let id = self.new_id();
@@ -495,7 +502,7 @@ impl<'a> Parser<'a> {
                     obj = Expr::Get { obj: Box::new(obj), property: attribute, id };
                 }
             } else if self.try_consume(TokenType::OpenBracket) {
-                let query = Box::new(self.expression());
+                let query = Box::new(self.expression(true));
                 self.expect(TokenType::CloseBracket);
                 obj = Expr::Slice { sequence: Box::new(obj), query, id }
             } else {
@@ -509,9 +516,9 @@ impl<'a> Parser<'a> {
         let mut list = Vec::new();
         if !self.check(end_token) {
             // no do-while :(
-            list.push(self.expression());
+            list.push(self.expression(true));
             while self.try_consume(TokenType::Comma) {
-                list.push(self.expression());
+                list.push(self.expression(true));
             }
         }
         self.expect(end_token);
@@ -619,10 +626,7 @@ impl<'a> Parser<'a> {
                 id: self.new_id(),
             };
         } else if self.try_consume(TokenType::OpenParen) {
-            let old = self.ignore_newlines;
-            self.ignore_newlines = true;
-            let expr = self.expression();
-            self.ignore_newlines = old;
+            let expr = self.expression(true);
             self.expect_because(TokenType::CloseParen, ParseError::ParenNotClosed);
             return expr;
         } else if self.try_consume(TokenType::Identifier) {
@@ -685,12 +689,11 @@ impl<'a> Parser<'a> {
         self.take_prev()
     }
 
-    fn expect_type(&mut self) -> ValueType {
-        self.skip_newlines();
-        if self.try_consume_any(&VALID_TYPES) {
+    fn try_consume_type(&mut self) -> Option<ValueType> {
+        let _type = if self.try_consume_any(&VALID_TYPES) {
             let token = self.take_prev();
-            ValueType::from_token(*token.kind()).unwrap()
-        } else if false && self.try_consume(TokenType::Func) {
+            ValueType::from_token(token.kind()).unwrap()
+        } else if self.try_consume(TokenType::Func) {
             self.expect(TokenType::OpenParen);
             let mut params = Vec::new();
             if !self.check(TokenType::CloseParen) {
@@ -704,8 +707,8 @@ impl<'a> Parser<'a> {
             let ret_type = if self.try_consume(TokenType::Colon) {
                 self.expect_type()
                 // so you technically could do:
-                // new func(int): func(int): int f = /* ... */
-                // let y = f(1)(2) + 3 // cursed
+                // new func(int): func(int): int function_function = /* ... */
+                // new int y = function_function(1)(2) + 3 // cursed
             } else {
                 ValueType::None
             };
@@ -713,6 +716,17 @@ impl<'a> Parser<'a> {
             let ret_type = Box::new(ret_type);
             let params = params.into_boxed_slice();
             ValueType::Function { ret_type, params }
+        } else {
+            return None
+        };
+        return Some(_type);
+    }
+
+    fn expect_type(&mut self) -> ValueType {
+        self.skip_newlines();
+        let _type = self.try_consume_type();
+        if let Some(_type) = _type {
+            _type
         } else {
             self.error_at_next(ParseError::NoValueType);
             ValueType::None
@@ -1147,11 +1161,6 @@ mod parsing_tests {
             expr = Parser::parse_expr_string("true ? 5\n: 10").unwrap();
             ans = evaluate_static(&expr);
             assert_eq!(ans, Ok(Value::Int(5)));
-        }
-
-        #[test]
-        fn if_stmts() {
-            // TODO
         }
     }
 }

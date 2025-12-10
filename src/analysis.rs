@@ -33,8 +33,6 @@ pub struct AnalysisResult {
     /// (mainly bc string concatention)
     pub bin_types: HashMap<usize, ValueType>,
     pub expr_types: HashMap<usize, ValueType>,
-    // TODO
-    // pub coercions: HashMap<usize, ValueType>,
 }
 
 impl AnalysisResult {
@@ -67,12 +65,11 @@ pub enum UsageError {
 }
 
 struct FunctionResolver<'ast> {
-    ret_type: ValueType,
     value_count: usize,
-    /// jlox reference
+    line: u32,
+    ret_type: ValueType,
     local_bindings: Vec<VarData>,
     depth: usize,
-    /// Whether the cu
     is_global: bool,
     loop_depth: usize,
     function_backlog: HashMap<String, TempFunction<'ast>>,
@@ -108,8 +105,7 @@ impl Globals {
 #[derive(Clone)]
 struct VarData {
     pub name: String,
-    /// if None, declared but not defined
-    pub val_type: Option<ValueType>,
+    pub val_type: ValueType,
     /// how many blocks into the function
     pub depth: usize,
 }
@@ -126,6 +122,7 @@ impl<'ast> FunctionResolver<'ast> {
             function_backlog: HashMap::new(),
             // begins pointing to some dummy value
             globals: Rc::new(RefCell::new(Globals::new())),
+            line: 0,
         }
     }
 
@@ -154,7 +151,7 @@ impl<'ast> FunctionResolver<'ast> {
     fn resolve_stmt(&mut self, stmt: &'ast Stmt) {
         stmt.accept(self)
     }
-
+    
     fn resolve_expr(&mut self, expr: &Expr) -> ValueType {
         let expr_type = expr.accept(self);
         // Save type of each sub-expression
@@ -196,12 +193,12 @@ impl<'ast> FunctionResolver<'ast> {
         let globals = &mut self.globals.borrow_mut().bindings;
         globals.push(VarData {
             name,
-            val_type: Some(val_type),
+            val_type: val_type,
             depth: 0,
         });
     }
 
-    fn declare_local(&mut self, name: String, val_type: Option<ValueType>) {
+    fn declare_local(&mut self, name: String, val_type: ValueType) {
         self.local_bindings.push(VarData {
             name,
             val_type,
@@ -231,11 +228,13 @@ impl<'ast> FunctionResolver<'ast> {
     fn error_at_token(&mut self, token: &Token, reason: UsageError) {
         eprintln!("[unfinished] Error on line {}: {:?}", token.line(), reason);
         self.globals.borrow_mut().errors.push(reason);
+        panic!()
     }
     
     fn error_at_expr(&mut self, _expr: &Expr, reason: UsageError) {
-        eprintln!("[unfinished] Error: {:?}", reason);
+        eprintln!("[unfinished] Error on line {}: {:?}", self.line, reason);
         self.globals.borrow_mut().errors.push(reason);
+        panic!()
         // TODO actual error locating
     }
 
@@ -244,22 +243,31 @@ impl<'ast> FunctionResolver<'ast> {
         eprintln!("\t{}", msg);
     }
 
-    /// Returns the type of the given expression.
+    /// Evaluates and returns the actual type of the given expression,
+    /// displaying an error if there is a mismatch.
+    /// 
+    /// See `expect_resolved_type` for more details
     fn expect_type(&mut self, expected: &ValueType, actual: &Expr) -> ValueType {
         let actual_type = self.resolve_expr(actual);
-        self.expect_resolved_type(expected, actual, actual_type)
+        self.expect_resolved_type(expected, actual, &actual_type);
+        actual_type
     }
 
-    /// Returns the type of the given expression.
-    fn expect_resolved_type(&mut self, expected: &ValueType, actual: &Expr, actual_type: ValueType) -> ValueType {
-        if !ValueType::can_convert_type(expected, &actual_type) {
+    /// Returns the actual type of the already-evaluated expression,
+    /// displaying an error if there is a mismatch.
+    /// 
+    /// This function uses `ValueType::can_convert_type`,
+    /// which means it uses coercion rules to determine whether the assertion passes.
+    /// For example, an `int` is allowed where a `float` is expected.
+    /// Actual casting is done during `codegen`.
+    fn expect_resolved_type(&mut self, expected: &ValueType, actual: &Expr, actual_type: &ValueType) {
+        if !ValueType::can_convert_type(expected, actual_type) {
             self.error_msg_at_expr(
                 &actual,
                 UsageError::TypeError,
                 &format!("Expected {:?} but got {:?}", expected, actual_type),
             );
         }
-        actual_type
     }
 
     fn finish_function_by_name(&mut self, name: &String) {
@@ -281,7 +289,7 @@ impl<'ast> FunctionResolver<'ast> {
         for (name, pm_type) in params {
             inner.local_bindings.push(VarData {
                 name: name.copy_ident(),
-                val_type: Some(pm_type.clone()),
+                val_type: pm_type.clone(),
                 depth: 0,
             });
         }
@@ -293,19 +301,30 @@ impl<'ast> FunctionResolver<'ast> {
 
 impl<'ast> StmtVisitor<'ast, ()> for FunctionResolver<'ast> {
     fn visit_summon_stmt(&mut self, _path: &Vec<Token>, _alias: &Option<Token>, _id: usize) {
-        todo!() // TODO
+        todo!() // TODO jury summons
     }
 
-    fn visit_var_stmt(&mut self, name: &Token, val: &'ast Option<Box<Expr>>) {
-        let val_type = val.as_ref().map(|v| self.resolve_expr(v));
+    fn visit_var_stmt(&mut self, name: &Token, explicit_type: &Option<ValueType>, value: &'ast Option<Box<Expr>>) {
+
+        self.line = name.line();
+
+        let real_type = match (explicit_type, value) {
+            // give it the any type
+            (None, None) => ValueType::Any,
+            // it has the type of `val`
+            (None, Some(val)) => self.resolve_expr(val),
+            // it has `explicit_type`, will be given a dummy value
+            (Some(var), None) => var.clone(),
+            // it has `explicit_type`, will be given `val` casted to `explicit_type`
+            (Some(var), Some(val)) => {
+                self.expect_type(var, val)
+            },
+        };
+
         if self.in_global_scope() {
-            let Some(real_type) = val_type else {
-                self.error_at_token(name, UsageError::MustInitGlobal);
-                return;
-            };
             self.declare_global(name.copy_ident(), real_type);
         } else {
-            self.declare_local(name.copy_ident(), val_type);
+            self.declare_local(name.copy_ident(), real_type);
         }
     }
 
@@ -342,14 +361,19 @@ impl<'ast> StmtVisitor<'ast, ()> for FunctionResolver<'ast> {
         self.loop_depth -= 1;
     }
 
-    fn visit_for_stmt(&mut self, _var: &Token, _sequence: &Box<Expr>, _body: &Box<Stmt>) {
+    fn visit_for_stmt(&mut self, var: &Token, _sequence: &Box<Expr>, _body: &Box<Stmt>) {
+
+        self.line = var.line();
+
         // TODO an actual range or sequence type
         // self.loop_depth += 1;
-        todo!()
+        todo!("idk :3")
         // self.loop_depth -= 1;
     }
 
     fn visit_keyword_stmt(&mut self, keyword: &Token, arg: &Option<Box<Expr>>) {
+        self.line = keyword.line();
+
         match keyword.kind() {
             TokenType::Break | TokenType::Continue => {
                 let mut loops_to_jump = 1;
@@ -373,14 +397,12 @@ impl<'ast> StmtVisitor<'ast, ()> for FunctionResolver<'ast> {
                 }
             }
             TokenType::Return => {
-                let arg_type = if let Some(arg) = arg {
-                    self.resolve_expr(arg)
+                if let Some(arg) = arg {
+                    let ret_type = self.ret_type.clone();
+                    self.expect_type(&ret_type, arg)
                 } else {
                     ValueType::None
                 };
-                if self.ret_type != arg_type {
-                    self.error_at_token(keyword, UsageError::TypeError);
-                }
             }
             _ => panic!("Invalid token for keyword statement made it to analysis"),
         }
@@ -394,12 +416,14 @@ impl<'ast> StmtVisitor<'ast, ()> for FunctionResolver<'ast> {
         body: &'ast Vec<Stmt>,
         _id: usize,
     ) {
+        self.line = name.line();
+
         let temp_name = name.copy_ident();
         let val_type = ValueType::func_type(ret_type, params);
         if self.in_global_scope() {
             self.declare_global(temp_name, val_type);
         } else {
-            self.declare_local(temp_name, Some(val_type))
+            self.declare_local(temp_name, val_type)
         }
         // Wait for resolving until first call
         // No forward declarations in this household
@@ -429,7 +453,7 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
         ValueType::coerce_binary(&true_type, &false_type)
             .unwrap_or({
                 // not equal & couldn't coerce
-                self.expect_resolved_type(&true_type, right, false_type);
+                self.expect_resolved_type(&true_type, right, &false_type);
                 (ValueType::Any, ValueType::Any)
             }).0 // types are equal after this point
     }
@@ -441,7 +465,7 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
         right: &Box<Expr>,
         id: usize,
     ) -> ValueType {
-        assert!(BINARY_OPERATORS.contains(op.kind()));
+        self.line = op.line();
 
         let left = self.resolve_expr(left);
         let right = self.resolve_expr(right);
@@ -476,7 +500,7 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
                 | TokenType::Greater
                 | TokenType::GreaterEqual
                 | TokenType::LessEqual => ValueType::Bool,
-                TokenType::DoubleDot => todo!(), // TODO
+                TokenType::DoubleDot => todo!(), // TODO ranges
                 _ => {
                     self.error_at_token(op, UsageError::InvalidOperator);
                     ValueType::Int
@@ -492,7 +516,7 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
                 | TokenType::Greater
                 | TokenType::GreaterEqual
                 | TokenType::LessEqual => ValueType::Bool,
-                TokenType::DoubleDot => todo!(), // TODO
+                TokenType::DoubleDot => todo!(), // TODO ranges
                 _ => {
                     self.error_at_token(op, UsageError::InvalidOperator);
                     ValueType::Float
@@ -518,7 +542,7 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
                 | TokenType::DoubleGreater
                 | TokenType::GreaterEqual
                 | TokenType::LessEqual => ValueType::Bool,
-                TokenType::DoubleDot => todo!(), // TODO
+                TokenType::DoubleDot => todo!(), // TODO ranges
                 _ => {
                     self.error_at_token(op, UsageError::InvalidOperator);
                     ValueType::String
@@ -537,18 +561,19 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
         &mut self,
         assignee: &Box<Expr>,
         value: &Box<Expr>,
-        id: usize,
+        assign_id: usize,
     ) -> ValueType {
         let val_type = self.resolve_expr(&value);
         // rust i swear to god
         match &**assignee {
-            Expr::Variable { identifier, .. } => {
+            Expr::Variable { identifier, id: var_id } => {
                 match self.get_var(identifier.lexeme().unwrap()) {
                     Some((binding, data)) => {
-                        self.globals.borrow_mut().final_data.bindings.insert(id, binding);
-                        if let Some(var_type) = data.val_type && var_type != val_type {
-                            self.error_at_expr(value, UsageError::TypeError);
-                        }
+                        // record id of outermost assign, not the assignee
+                        self.globals.borrow_mut().final_data.bindings.insert(assign_id, binding);
+                        self.expect_resolved_type(&data.val_type, value, &val_type);
+                        self.globals.borrow_mut().final_data.expr_types.insert(*var_id, data.val_type.clone());
+                        return data.val_type;
                     }
                     None => self.error_at_expr(assignee, UsageError::UndefinedIdent),
                 }
@@ -574,11 +599,13 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
 
     fn visit_unary_expr(
         &mut self,
-        _op: &Token, // theres only 3 operators and they're all very similar
+        op: &Token, // theres only 3 operators and they're all very similar
         target: &Box<Expr>,
         _prefix: &bool,
         _id: usize,
     ) -> ValueType {
+        self.line = op.line();
+
         let target_type = self.resolve_expr(target);
         match target_type {
             ValueType::Int => {
@@ -599,43 +626,47 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
     }
 
     fn visit_call_expr(&mut self, callee: &Box<Expr>, args: &Vec<Expr>, _id: usize) -> ValueType {
-        let callee_type = self.resolve_expr(&callee);
-        if let ValueType::Function { ret_type, params } = callee_type
-        {
-            let mut args_match = true;
-            if args.len() != params.len() {
-                self.error_at_expr(callee, UsageError::ParamMismatch);
-            } else {
-                for i in 0..args.len() {
-                    let actual = self.expect_type(&params[i], &args[i]);
-                    if actual != params[i] {
-                        args_match = false;
-                        self.error_at_expr(&args[i], UsageError::ParamMismatch);
+        // TODO Other valid callees
+        match self.resolve_expr(&callee) {
+            ValueType::Function { ret_type, params } => {
+                let mut args_match = true;
+                if args.len() != params.len() {
+                    self.error_at_expr(callee, UsageError::ParamMismatch);
+                } else {
+                    for (param, arg) in params.iter().zip(args.iter()) {
+                        let actual = self.expect_type(param, arg);
+                        if !ValueType::can_convert_type(&actual, param) {
+                            args_match = false;
+                            self.error_at_expr(arg, UsageError::ParamMismatch);
+                        }
                     }
                 }
+                if args_match {
+                    // everything is correct, resolve body
+                    // find identifier first
+                    let ident = match &**callee {
+                        // TODO other expressions that can eval to a func
+                        Expr::Variable { identifier, .. } => identifier.copy_ident(),
+                        _ => String::new(),
+                    };
+                    self.finish_function_by_name(&ident);
+                }
+                *ret_type.clone()
             }
-            if args_match {
-                // everything is correct, resolve body
-                // find identifier first
-                let ident = match &**callee {
-                    // TODO other expressions that can eval to a func
-                    Expr::Variable { identifier, .. } => identifier.copy_ident(),
-                    _ => String::new(),
-                };
-                self.finish_function_by_name(&ident);
+            other => {
+                self.error_msg_at_expr(
+                    &callee,
+                    UsageError::TypeError,
+                    &format!("Can't call type {}", other),
+                );
+                ValueType::Any
             }
-            *ret_type.clone()
-        } else {
-            self.error_msg_at_expr(
-                &callee,
-                UsageError::TypeError,
-                &format!("Can't call type {}", callee_type),
-            );
-            ValueType::Any
         }
     }
 
     fn visit_variable_expr(&mut self, identifier: &Token, id: usize) -> ValueType {
+        self.line = identifier.line();
+
         let var_type = self.get_var(identifier.lexeme().unwrap());
         match var_type {
             Some((binding, data)) => {
@@ -644,11 +675,7 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
                     .final_data
                     .bindings
                     .insert(id, binding);
-                let Some(initialized_type) = data.val_type else {
-                    self.error_at_token(identifier, UsageError::UndefinedIdent);
-                    return ValueType::Any;
-                };
-                initialized_type
+                data.val_type
             }
             None => {
                 self.error_at_token(identifier, UsageError::UndefinedIdent);
@@ -658,6 +685,8 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
     }
 
     fn visit_literal_expr(&mut self, repr: &Token, val: &Value, _id: usize) -> ValueType {
+        self.line = repr.line();
+
         self.value_count += 1;
         if self.value_count == u8::MAX as usize {
             // TODO increase max (maybe to u32? any more and its like. whats goin on) and have a OP_CONSTANT_WIDE
@@ -667,7 +696,9 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
     }
     
     fn visit_boolean_expr(&mut self,
-        left: &'_ Box<Expr>, _op: &'_ Token, right: &'_ Box<Expr>, _id: usize) -> ValueType {
+        left: &'_ Box<Expr>, op: &'_ Token, right: &'_ Box<Expr>, _id: usize) -> ValueType {
+        self.line = op.line();
+
         self.expect_type(&ValueType::Bool, left);
         self.expect_type(&ValueType::Bool, right);
         ValueType::Bool
@@ -680,11 +711,15 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
     
     fn visit_method_expr(&mut self,
         obj: &'_ Box<Expr>, method: &'_ Token, args: &'_ Vec<Expr>, id: usize) -> ValueType {
+        self.line = method.line();
+
         todo!()
     }
     
     fn visit_get_expr(&mut self,
         obj: &'_ Box<Expr>, property: &'_ Token, id: usize) -> ValueType {
+        self.line = property.line();
+
         todo!()
     }
 }

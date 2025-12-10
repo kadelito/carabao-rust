@@ -4,9 +4,10 @@ use crate::expr_ast::Expr;
 
 #[derive(Debug)]
 pub enum Stmt {
+    // TODO the commented-out ones
     Function { ret_type: ValueType, name: Token, params: Vec<(Token, ValueType)>, body: Vec<Stmt>, id: usize },
     Summon { path: Vec<Token>, alias: Option<Token>, id: usize },
-    Var { name: Token, val: Option<Box<Expr>> },
+    Var { name: Token, var_type: Option<ValueType>, val: Option<Box<Expr>> },
     Block { statements: Vec<Stmt> },
     Expression { expression: Box<Expr> },
     If { condition: Box<Expr>, true_branch: Box<Stmt>, false_branch: Option<Box<Stmt>> },
@@ -15,19 +16,19 @@ pub enum Stmt {
     Keyword { keyword: Token, arg: Option<Box<Expr>> },
 }
 
-impl<'ast> Stmt {
+impl<'me, 'vis> Stmt where 'me: 'vis {
     pub fn dummy() -> Self {
         Self::Block { statements: Vec::new() }
     }
 
-    pub fn accept<T>(&'ast self, visitor: &mut impl StmtVisitor<'ast, T>) -> T {
+    pub fn accept<T>(&'me self, visitor: &mut impl StmtVisitor<'vis, T>) -> T {
         match self {
             Self::Function { ret_type, name, params, body, id } =>
                 visitor.visit_function_stmt(ret_type, name, params, body, *id),
             Self::Summon { path, alias, id } =>
                 visitor.visit_summon_stmt(path, alias, *id),
-            Self::Var { name, val } =>
-                visitor.visit_var_stmt(name, val),
+            Self::Var { name, var_type, val } =>
+                visitor.visit_var_stmt(name, var_type, val),
             Self::Block { statements } =>
                 visitor.visit_block_stmt(statements),
             Self::Expression { expression } =>
@@ -50,7 +51,7 @@ pub trait StmtVisitor<'ast, T> {
     fn visit_summon_stmt(&mut self,
         path: &'ast Vec<Token>, alias: &'ast Option<Token>, id: usize) -> T;
     fn visit_var_stmt(&mut self,
-        name: &'ast Token, val: &'ast Option<Box<Expr>>) -> T;
+        name: &'ast Token, var_type: &'ast Option<ValueType>, val: &'ast Option<Box<Expr>>) -> T;
     fn visit_block_stmt(&mut self,
         statements: &'ast Vec<Stmt>) -> T;
     fn visit_expression_stmt(&mut self,

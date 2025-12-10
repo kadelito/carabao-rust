@@ -1,6 +1,6 @@
-use std::{fmt::Display, rc::Rc};
+use std::{collections::HashMap, fmt::Display, rc::Rc};
 
-use crate::{lexing::{Token, TokenType}, values::{self, Function, Value}};
+use crate::{analysis::AnalysisResult, codegen::{self, LineRLE, OpCode}, lexing::{Token, TokenType}, values::{self, Function, Value}};
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum ValueType {
@@ -44,20 +44,26 @@ const TYPE_BYTE_OFFSET: u8 = 0x80;
 
 impl ValueType {
     pub fn dummy(&self) -> Value {
+        // TODO document this
         match self {
             ValueType::Any => Value::Any(Box::new(Value::None)),
-            ValueType::Int => todo!(),
-            ValueType::Float => todo!(),
-            ValueType::Char => todo!(),
-            ValueType::Bool => todo!(),
+            ValueType::Int => Value::Int(0),
+            ValueType::Float => Value::Float(0.0),
+            ValueType::Char => Value::Char('\0'),
+            ValueType::Bool => Value::Bool(false),
             ValueType::String => Value::String(Rc::new(String::new())),
             ValueType::Function { ret_type, params } => {
                 let func = Function {
                     name: String::new(),
                     params: params.clone(),
                     ret_type: *ret_type.clone(),
-                    constants: Box::new([]),
-                    code: Box::new([]),
+                    constants: Box::new([ret_type.dummy()]),
+                    code: vec![
+                        // return dummy value from constants
+                        OpCode::Constant.into(), 0,
+                        OpCode::Return.into(),
+                    ].into_boxed_slice(),
+                    lines: Box::new([LineRLE { line: 0, count: 3 }]),
                 };
                 Value::Function(Rc::new(func))
             },
@@ -65,7 +71,7 @@ impl ValueType {
         }
     }
 
-    pub fn from_token(value: TokenType) -> Option<Self> {
+    pub fn from_token(value: &TokenType) -> Option<Self> {
         match value {
             TokenType::Any => Some(Self::Any),
             TokenType::Int => Some(Self::Int),
@@ -78,6 +84,7 @@ impl ValueType {
         }
     }
 
+    /// Returns whether an explicit cast works from `given` to `expected`.
     pub fn can_convert_type(expected: &ValueType, given: &ValueType) -> bool {
         if *expected == ValueType::Any
             || *given == ValueType::Any 

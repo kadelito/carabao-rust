@@ -7,11 +7,11 @@ use crate::stmt_ast::*;
 use crate::types::*;
 
 pub mod opcodes {
-    use crate::{codegen::OpCode, types::ValueType, values::Function};
+    use crate::{builtins::GLOBAL_FUNCS, codegen::OpCode, types::ValueType, values::Function};
 
     pub fn disassemble(func: &Function) {
         
-        // like 'repeat(string, int): string'
+        // like 'pow(float, int): float'
         let sig = format!("{}({}): {:?}",
             func.name,
             func.params.iter()
@@ -20,14 +20,21 @@ pub mod opcodes {
                 .join(", "),
             func.ret_type);
         println!("======== {} ========", sig);
-        // println!("{:4} {:^16} {}", "IP", "Code", "Args");
+        // println!("{:^4} {:^4} {:^16} {}", "Ln", "IP", "Code", "Args");
 
-        let mut reader = Reader { func, ip: 0 };
+        let mut reader = Reader { func, ip: 0, prev_line: 0 };
         while reader.ip < reader.func.code.len() {
             /**/
+            let line = reader.func.get_line(reader.ip);
+            let linestr = if line != reader.prev_line {
+                format!("{:04}", line)
+            } else {
+                "   |".into()
+            };
+            reader.prev_line = line;
             let op = OpCode::try_from(reader.byte()).expect("Should be at the start of an instruction");
             let opstr = format!("{op:?}");
-            print!("{:04} {opstr:<16} ", reader.ip - 1);
+            print!("{linestr} {:04} {opstr:<16} ", reader.ip - 1);
             match op {
                 OpCode::Pass
                 | OpCode::None
@@ -76,8 +83,9 @@ pub mod opcodes {
                 | OpCode::IntLess
                 | OpCode::IntGreater
                 | OpCode::BoolNot
-                | OpCode::BoolAnd
-                | OpCode::BoolOr => println!(),
+                // opcode description already printed,
+                // no more info so go to next line
+                    => println!(),
                 OpCode::Constant => {
                     let index = reader.byte() as usize;
                     let con = reader.func.constants.get(index).unwrap();
@@ -85,11 +93,20 @@ pub mod opcodes {
                 }
                 OpCode::GetLocal
                 | OpCode::SetLocal
-                | OpCode::GetGlobal
-                | OpCode::SetGlobal
+                | OpCode::SwapTop
                 | OpCode::Call => {
                     let b= reader.byte();
                     println!("{b:02}");
+                }
+                OpCode::GetGlobal
+                | OpCode::SetGlobal => {
+                    let b= reader.byte() as usize;
+                    let num_globals = GLOBAL_FUNCS.len();
+                    if b < num_globals {
+                        println!("{}", GLOBAL_FUNCS[b].0);
+                    } else {
+                        println!("{:02}", b - num_globals);
+                    }
                 }
                 OpCode::Jump
                 | OpCode::JumpIfNot => {
@@ -100,7 +117,6 @@ pub mod opcodes {
                     println!("to {new_index}");
                 },
             }
-            /**/
         }
         
         println!("======== {} END ========", func.name);
@@ -109,6 +125,7 @@ pub mod opcodes {
     struct Reader<'f> {
         func: &'f Function,
         ip: usize,
+        prev_line: u32,
     }
 
     impl Reader<'_> {

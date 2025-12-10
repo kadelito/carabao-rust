@@ -1,5 +1,5 @@
 """
-Assign      = assignee: Expr | op: Token | value: Expr
+Assign      = assignee: Expr | op: Token | value: Expr // op for +=, *=, etc
 """
 exprs = """
 Conditional = condition: Expr | if_true: Expr | if_false: Expr
@@ -22,7 +22,7 @@ Switch      = value: Expr | branches: Vec<(Expr, Stmt)>
 stmts = """
 Function    = ret_type: ValueType | name: Token | params: Vec<(Token, ValueType)> | body: Vec<Stmt> | id: usize
 Summon      = path: Vec<Token> | alias: Option<Token> | id: usize
-Var         = name: Token | val: Option<Box<Expr>>
+Var         = name: Token | var_type: Option<ValueType> | val: Option<Box<Expr>>
 Block       = statements: Vec<Stmt>
 Expression  = expression: Box<Expr>
 If          = condition: Box<Expr> | true_branch: Stmt | false_branch: Option<Stmt>
@@ -37,13 +37,13 @@ copied = "usize".split(",")
 def generate(name: str, desc: str, add_id = False):
     # remove comments
     desc = [l[:l.index("//") if "//" in l else len(l)] for l in desc.split("\n")]
-    # split into variant & fields
+    # split into [variant, fields]
     desc = [l.split("=") for l in desc]
     # split fields
     desc = [(l[0].strip(), l[1].split("|")) for l in desc]
     # split each field into name and type
     desc = [(l[0], [[p.strip() for p in f.split(":")] for f in l[1]]) for l in desc]
-    # add Box<> if a field is of the enum's type
+    # add Box<> if a field has the enum's type
     desc = [(l[0], [f if name not in f[1] or f[1].startswith("Vec") else [f[0], f[1].replace(name, f"Box<{name}>")] for f in l[1]]) for l in desc]
     if add_id:
         desc = [(l[0], l[1] + [["id", "usize"]]) for l in desc]
@@ -81,7 +81,6 @@ def generate(name: str, desc: str, add_id = False):
     print(f"    pub fn accept<T>(&'me self, visitor: &mut impl {name}Visitor<'vis, T>) -> T {{")
     print( "        match self {")
     for node in desc:
-        # no oneline/multiline variant, its short enough probably :)
         print(" "*12+f"Self::{node[0]} {{ ", end="")
         for i, field in enumerate(node[1]):
             print(f"{field[0]}", end="")
@@ -116,13 +115,13 @@ import sys
 tree_to_generate = sys.argv[1].lower()
 
 print("use crate::lexing::Token;")
-print("use crate::values::*;")
 print("use crate::types::*;")
 if tree_to_generate == "stmt":
     print("use crate::expr_ast::Expr;")
     print()
     generate("Stmt", stmts, add_id=False)
 elif tree_to_generate == "expr":
+    print("use crate::values::*;")
     print()
     generate("Expr", exprs, add_id=True)
 else:
