@@ -349,7 +349,10 @@ impl<'a> Parser<'a> {
     ) -> Expr {
         // case when no left operand,
         // continue ahead if it's a unary prefix
-        if !self.check_any(&[TokenType::Bang, TokenType::Minus, TokenType::Tilde])
+        if !self.check_any(&[TokenType::Bang, TokenType::Minus, TokenType::Tilde,
+                #[cfg(test)] TokenType::DoubleLess,
+                #[cfg(test)] TokenType::DoubleGreater
+            ])
             && self.try_consume_any(operators)
         {
             self.error_at_prev(ParseError::BinOpNoLeft);
@@ -443,8 +446,10 @@ impl<'a> Parser<'a> {
     ) -> Expr {
         // case when no left operand,
         // continue ahead if it's a unary prefix
-        if !self.check_any(&[TokenType::Bang, TokenType::Minus, TokenType::Tilde])
-            && self.try_consume_any(operators)
+        if !self.check_any(&[TokenType::Bang, TokenType::Minus, TokenType::Tilde,
+                #[cfg(test)] TokenType::DoubleLess,
+                #[cfg(test)] TokenType::DoubleGreater
+            ]) && self.try_consume_any(operators)
         {
             self.error_at_prev(ParseError::BinOpNoLeft);
             return self.left_assoc_bin_series(operand, operators);
@@ -466,7 +471,10 @@ impl<'a> Parser<'a> {
     }
 
     fn unary(&mut self) -> Expr {
-        if self.try_consume_any(&[TokenType::Bang, TokenType::Minus, TokenType::Tilde]) {
+        if self.try_consume_any(&[TokenType::Bang, TokenType::Minus, TokenType::Tilde,
+            #[cfg(test)] TokenType::DoubleLess,
+            #[cfg(test)] TokenType::DoubleGreater
+        ]) {
             self.skip_newlines();
             let op = self.take_prev();
             let target = self.unary();
@@ -871,7 +879,7 @@ impl<'a> From<&'a str> for Parser<'a> {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum ParseError {
     TokenError(TokenizationError),
     NoExpression,

@@ -56,7 +56,6 @@ pub mod opcodes {
                 | OpCode::AnyToChar
                 | OpCode::AnyToBool
                 | OpCode::AnyToString
-                | OpCode::ToStringTEMP
 
                 | OpCode::ValEqual
                 | OpCode::Concat
@@ -86,6 +85,13 @@ pub mod opcodes {
                 // opcode description already printed,
                 // no more info so go to next line
                     => println!(),
+
+                #[cfg(test)]
+                OpCode::TESTTakeInput
+                | OpCode::TESTYield
+                    // see above
+                    => println!(),
+
                 OpCode::Constant => {
                     let index = reader.byte() as usize;
                     let con = reader.func.constants.get(index).unwrap();

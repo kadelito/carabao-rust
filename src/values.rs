@@ -96,6 +96,12 @@ impl From<String> for Value {
     }
 }
 
+impl From<&str> for Value {
+    fn from(value: &str) -> Self {
+        Self::String(Rc::new(value.to_owned()))
+    }
+}
+
 impl From<NativeFunction> for Value {
     fn from(value: NativeFunction) -> Self {
         Self::NativeFunc(Rc::new(value))

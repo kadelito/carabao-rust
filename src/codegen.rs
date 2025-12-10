@@ -41,7 +41,11 @@ pub enum OpCode {
     AnyToBool,
     AnyToChar,
     AnyToString,
-    ToStringTEMP,
+
+    #[cfg(test)]
+    TESTTakeInput,
+    #[cfg(test)]
+    TESTYield,
 
     // ========== Arithmetic operators ==========
 
@@ -710,6 +714,20 @@ impl ExprVisitor<'_, ()> for Generator {
     fn visit_unary_expr(&mut self, op: &Token, target: &Box<Expr>, prefix: &bool, id: usize) -> () {
         self.update_loc(op);
 
+        #[cfg(test)]
+        match op.kind() {
+            TokenType::DoubleGreater => {
+                self.write_instr(OpCode::TESTTakeInput);
+                return;
+            },
+            TokenType::DoubleLess => {
+                self.code_expr_as_is(target);
+                self.write_instr(OpCode::TESTYield);
+                return;
+            }
+            _ => self.code_expr_as_is(target)
+        }
+        #[cfg(not(test))]
         self.code_expr_as_is(target);
         match self.take_expr_type(target) {
             ValueType::Int => match op.kind() {

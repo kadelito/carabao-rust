@@ -28,11 +28,23 @@ pub fn interpret(src: &str) -> Result<(), ProgramError> {
     run(main_script)
 }
 
-pub fn run(function: Function) -> Result<(), ProgramError> {
-    VM::new(function).run()
+pub fn from(src: &str) -> Result<VM, ProgramError> {
+    let parser = Parser::from(src);
+    let stmts = parser.parse()
+        .map_err(|errs| ProgramError::ParseError(errs))?;
+    let context = analyze(&stmts)
+        .map_err(|errs| ProgramError::UsageError(errs))?;
+    let main_script = generate(&stmts, context);
+    drop(stmts);
+    Ok(VM::new(main_script))
 }
 
-struct VM {
+pub fn run(function: Function) -> Result<(), ProgramError> {
+    VM::new(function).run()
+        .map(|_| ())
+}
+
+pub struct VM {
     call_stack: Vec<Frame>,
     stack: Vec<Value>,
     globals: Vec<Value>,
@@ -55,7 +67,7 @@ impl Frame {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum RuntimeError {
     TypeError,
     InvalidCode,
@@ -64,8 +76,17 @@ pub enum RuntimeError {
     ManualCrash,
 }
 
+#[derive(PartialEq)]
+enum SuccessStatus {
+    Continue, // Continue to the next instruction.
+    End,      // Return from the execution loop.
+
+    #[cfg(test)]
+    ReturnTop(Value), // Pause execution and return the top of the stack
+}
+
 impl VM {
-    fn new(function: Function) -> Self {
+    pub fn new(function: Function) -> Self {
         let mut new = Self {
             call_stack: Vec::with_capacity(64),
             stack: Vec::with_capacity(1024),
@@ -80,16 +101,30 @@ impl VM {
         new
     }
 
-    // TODO test mode, run_output accept_input
-    // #[cfg(test)]
-    // fn 
+    /// Runs until it encounters a
+    #[cfg(test)]
+    pub fn run_with_input(&mut self, input: Value) -> Result<Value, ProgramError> {
+        loop {
+            match self.cycle(&input)? {
+                SuccessStatus::Continue => {},
+                SuccessStatus::End => { return Ok(Value::None); },
+                SuccessStatus::ReturnTop(value) => { return Ok(value); },
+            }
+        }
+    }
 
-    fn run(&mut self) -> Result<(), ProgramError> {
-        while self.cycle()? {}
+    #[cfg(test)]
+    pub fn run(&mut self) -> Result<Value, ProgramError> {
+        self.run_with_input(Value::None)
+    }
+
+    #[cfg(not(test))]
+    pub fn run(&mut self) -> Result<(), ProgramError> {
+        while self.cycle(&Value::None)? == SuccessStatus::Continue {}
         Ok(())
     }
 
-    fn cycle(&mut self) -> Result<bool, ProgramError> {
+    fn cycle(&mut self, input: &Value) -> Result<SuccessStatus, ProgramError> {
         let byte = self.read_instruction();
         #[cfg(feature = "runtime_trace")]
         {
@@ -182,7 +217,7 @@ impl VM {
                     println!("\t<--<-- Exiting {}", self.top_frame().function.name);
                 }
                 if self.call_stack.len() == 1 {
-                    return Ok(false);
+                    return Ok(SuccessStatus::End);
                 } else {
                     let prev_frame = self.call_stack.pop().unwrap();
                     let result = self.stack_pop();
@@ -232,10 +267,6 @@ impl VM {
                 };
                 self.stack.push(Value::String(v));
             }
-            OpCode::ToStringTEMP => {
-                let val = self.stack_pop();
-                self.stack.push(format!("{}", val).into());
-            }
             OpCode::ValEqual => self.binary_val(|a, b| Value::Bool(a == b)),
             OpCode::Concat => {
                 let Value::String(s2) = self.stack_pop() else { panic!() };
@@ -278,6 +309,16 @@ impl VM {
                 self.stack.push(Value::Bool(!b));
             }
             OpCode::Crash => return Err(self.runtime_error(RuntimeError::ManualCrash)),
+            #[cfg(test)]
+            OpCode::TESTTakeInput => {
+                self.stack.push(input.clone());
+            }
+            #[cfg(test)]
+            OpCode::TESTYield => {
+                let value = self.stack_pop();
+                self.stack.push(Value::None);
+                return Ok(SuccessStatus::ReturnTop(value));
+            }
         }
         #[cfg(feature = "runtime_trace")]
         {
@@ -289,7 +330,7 @@ impl VM {
             );
             // println!("\tG={:?}", self.globals);
         }
-        Ok(true)
+        Ok(SuccessStatus::Continue)
     }
 
     fn top_frame(&mut self) -> &mut Frame {

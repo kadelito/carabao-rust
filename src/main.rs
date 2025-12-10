@@ -40,7 +40,7 @@ fn run(config: &Config) -> Result<(), ProgramError> {
     vm::interpret(&contents)
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum ProgramError {
     IOError,
     ParseError(Vec<ParseError>),
@@ -75,10 +75,17 @@ impl Config {
 
 #[cfg(test)]
 mod main_tests {
+    use crate::values::Value;
+
     use super::*;
 
     #[test]
     fn hello_world() {
-
+        let mut vm = vm::from(r#"
+        new hello = "Hello "
+        new world = "world!"
+        <<(hello + world)
+        "#).unwrap();
+        assert_eq!(vm.run(), Ok(Value::from("Hello world!")));
     }
 }

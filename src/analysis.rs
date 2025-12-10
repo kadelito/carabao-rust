@@ -51,7 +51,7 @@ pub enum Binding {
     Globals(usize),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum UsageError {
     TypeError,
     UndefinedIdent,
@@ -607,6 +607,12 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
         self.line = op.line();
 
         let target_type = self.resolve_expr(target);
+        #[cfg(test)]
+        match op.kind() {
+            TokenType::DoubleGreater  => { return target_type; }
+            TokenType::DoubleLess => { return ValueType::None; }
+            _ => {}
+        }
         match target_type {
             ValueType::Int => {
                 // negate & bitwise not
