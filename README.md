@@ -1,3 +1,13 @@
+# Carabao
+
+Carabao is a statically-typed scripting language I designed
+to make easy things easy.
+
+## Installation
+
+## Example
+
+```.
 func split(string str, char delim): string[] {
     new string[] list = []
     new temp = ""
@@ -16,6 +26,8 @@ func split(string str, char delim): string[] {
     // Don't forget the last string
     list.push(temp)
     count = count + 1
-    println("Split \"", str, "\" by '" + delim + "'' into ", count as int, " strings.\n")
+    print("Split ", str, " into ", count as int, " strings.\n")
+    // Note: you can just call println() instead
     return list
 }
+```
