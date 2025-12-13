@@ -75,7 +75,7 @@ impl Config {
 
 #[cfg(test)]
 mod main_tests {
-    use crate::values::Value;
+    use crate::values::TypedValue;
     use super::*;
 
     #[test]
@@ -85,7 +85,7 @@ mod main_tests {
         new world = "world!"
         <<(hello + world)
         "#).unwrap();
-        assert_eq!(vm.run(), Ok(Value::from("Hello world!")));
+        assert_eq!(vm.run(), Ok(TypedValue::from("Hello world!")));
     }
 
     #[test]
@@ -104,10 +104,10 @@ mod main_tests {
         }
         <<x
         "#).unwrap();
-        assert_eq!(vm.run(), Ok(Value::Int(3)));
-        assert_eq!(vm.run(), Ok(Value::Int(4)));
-        assert_eq!(vm.run(), Ok(Value::Int(2)));
-        assert_eq!(vm.run(), Ok(Value::Int(1)));
+        assert_eq!(vm.run(), Ok(TypedValue::Int(3)));
+        assert_eq!(vm.run(), Ok(TypedValue::Int(4)));
+        assert_eq!(vm.run(), Ok(TypedValue::Int(2)));
+        assert_eq!(vm.run(), Ok(TypedValue::Int(1)));
 
         let mut vm = vm::from(r#"
         func get_x(): int {
@@ -118,8 +118,8 @@ mod main_tests {
         new x = 20
         <<(get_x()) // references old x, still 10
         "#).unwrap();
-        assert_eq!(vm.run(), Ok(Value::Int(10)));
-        assert_eq!(vm.run(), Ok(Value::Int(10)));
+        assert_eq!(vm.run(), Ok(TypedValue::Int(10)));
+        assert_eq!(vm.run(), Ok(TypedValue::Int(10)));
     }
 
     #[test]
@@ -137,8 +137,8 @@ mod main_tests {
             <<gcd(a, b)
         }
         "#).unwrap();
-        let _ = vm.run_with_input(Value::Int(259));
-        let gcd = vm.run_with_input(Value::Int(77)).unwrap();
-        assert_eq!(gcd, Value::Int(7));
+        let _ = vm.run_with_input(TypedValue::Int(259));
+        let gcd = vm.run_with_input(TypedValue::Int(77)).unwrap();
+        assert_eq!(gcd, TypedValue::Int(7));
     }
 }

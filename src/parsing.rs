@@ -24,7 +24,7 @@ pub struct Parser<'a> {
     next_id: usize,
     errors: Vec<ParseError>,
     panic_mode: bool,
-    strings: HashMap<String, Value>
+    strings: HashMap<String, TypedValue>
 }
 
 const VALID_TYPES: [TokenType; 6] = {
@@ -542,19 +542,19 @@ impl<'a> Parser<'a> {
         if self.try_consume(TokenType::True) {
             return Expr::Literal {
                 repr: self.take_prev(),
-                val: Value::Bool(true),
+                val: TypedValue::Bool(true),
                 id,
             };
         } else if self.try_consume(TokenType::False) {
             return Expr::Literal {
                 repr: self.take_prev(),
-                val: Value::Bool(false),
+                val: TypedValue::Bool(false),
                 id,
             };
         } else if self.try_consume(TokenType::None) {
             return Expr::Literal {
                 repr: self.take_prev(),
-                val: Value::None,
+                val: TypedValue::None,
                 id,
             };
         } else if self.try_consume(TokenType::IntLiteral) {
@@ -568,7 +568,7 @@ impl<'a> Parser<'a> {
                 Ok(i) => {
                     return Expr::Literal {
                         repr: literal,
-                        val: Value::Int(i),
+                        val: TypedValue::Int(i),
                         id,
                     };
                 }
@@ -588,7 +588,7 @@ impl<'a> Parser<'a> {
                 Ok(f) => {
                     return Expr::Literal {
                         repr: literal,
-                        val: Value::Float(f),
+                        val: TypedValue::Float(f),
                         id,
                     };
                 }
@@ -632,7 +632,7 @@ impl<'a> Parser<'a> {
                 }
             }
             val.shrink_to_fit();
-            let val = Value::from(val);
+            let val = TypedValue::from(val);
             
             // it wasn't there before, so we insert it here with the formatted string
             // Note that the pointer
@@ -644,7 +644,7 @@ impl<'a> Parser<'a> {
             let lexeme = literal.take_lexeme().unwrap();
             let mut chars = lexeme.chars();
             chars.next(); // Consume opening quote
-            let val = Value::Char(chars.next().unwrap());
+            let val = TypedValue::Char(chars.next().unwrap());
             return Expr::Literal { repr: literal, val, id };
         } else if self.try_consume(TokenType::OpenParen) {
             let expr = self.expression(true);
@@ -966,7 +966,7 @@ mod parsing_tests {
             let Expr::Literal { repr: _, val, .. } = one else {
                 panic!("'one' did not match the pattern.")
             };
-            let Value::Int(i) = val else {
+            let TypedValue::Int(i) = val else {
                 panic!("'i' did not match the pattern.")
             };
             assert_eq!(i, 1);
@@ -976,7 +976,7 @@ mod parsing_tests {
             let Expr::Literal { repr: _, val, .. } = pi else {
                 panic!("'pi' did not match the pattern.")
             };
-            let Value::Float(f) = val else {
+            let TypedValue::Float(f) = val else {
                 panic!("'i' did not match the pattern.")
             };
             assert_eq!(f, 3.14159)
@@ -990,115 +990,115 @@ mod parsing_tests {
         fn exprs() {
             let mut expr = Parser::parse_expr_string("1+1").unwrap();
             let mut ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(2)));
+            assert_eq!(ans, Ok(TypedValue::Int(2)));
 
             expr = Parser::parse_expr_string("5 + 3 * 2").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(11)));
+            assert_eq!(ans, Ok(TypedValue::Int(11)));
 
             expr = Parser::parse_expr_string("10 - 4 / 2").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(8)));
+            assert_eq!(ans, Ok(TypedValue::Int(8)));
 
             expr = Parser::parse_expr_string("(8 + 2) * (3 - 1)").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(20)));
+            assert_eq!(ans, Ok(TypedValue::Int(20)));
 
             expr = Parser::parse_expr_string("-5 + 3").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(-2)));
+            assert_eq!(ans, Ok(TypedValue::Int(-2)));
 
             expr = Parser::parse_expr_string("!true").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Bool(false)));
+            assert_eq!(ans, Ok(TypedValue::Bool(false)));
 
             expr = Parser::parse_expr_string("~15").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(!15)));
+            assert_eq!(ans, Ok(TypedValue::Int(!15)));
 
             expr = Parser::parse_expr_string("7 & 3").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(3)));
+            assert_eq!(ans, Ok(TypedValue::Int(3)));
 
             expr = Parser::parse_expr_string("12 | 5").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(13)));
+            assert_eq!(ans, Ok(TypedValue::Int(13)));
 
             expr = Parser::parse_expr_string("9 ^ 6").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(15)));
+            assert_eq!(ans, Ok(TypedValue::Int(15)));
 
             expr = Parser::parse_expr_string("4 << 2").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(16)));
+            assert_eq!(ans, Ok(TypedValue::Int(16)));
 
             expr = Parser::parse_expr_string("16 >> 1").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(8)));
+            assert_eq!(ans, Ok(TypedValue::Int(8)));
 
             expr = Parser::parse_expr_string("-(-10)").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(10)));
+            assert_eq!(ans, Ok(TypedValue::Int(10)));
 
             expr = Parser::parse_expr_string("!(false)").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Bool(true)));
+            assert_eq!(ans, Ok(TypedValue::Bool(true)));
 
             expr = Parser::parse_expr_string("~~7").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(7)));
+            assert_eq!(ans, Ok(TypedValue::Int(7)));
 
             expr = Parser::parse_expr_string("(5 + 3) & (2 * 4)").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(8)));
+            assert_eq!(ans, Ok(TypedValue::Int(8)));
 
             expr = Parser::parse_expr_string("100 / 10 + 5 * 2").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(20)));
+            assert_eq!(ans, Ok(TypedValue::Int(20)));
 
             expr = Parser::parse_expr_string("(20 - 5) * (3 + 2) / 5").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(15)));
+            assert_eq!(ans, Ok(TypedValue::Int(15)));
 
             expr = Parser::parse_expr_string("14 % 3").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(2)));
+            assert_eq!(ans, Ok(TypedValue::Int(2)));
 
             expr = Parser::parse_expr_string("-10 % 3").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(2)));
+            assert_eq!(ans, Ok(TypedValue::Int(2)));
 
             expr = Parser::parse_expr_string("5.5 + 2.5").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Float(8.0)));
+            assert_eq!(ans, Ok(TypedValue::Float(8.0)));
 
             expr = Parser::parse_expr_string("10.0 / 4.0").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Float(2.5)));
+            assert_eq!(ans, Ok(TypedValue::Float(2.5)));
 
             expr = Parser::parse_expr_string("3 + 4.5").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Float(7.5)));
+            assert_eq!(ans, Ok(TypedValue::Float(7.5)));
 
             expr = Parser::parse_expr_string("2.5 * 2").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Float(5.0)));
+            assert_eq!(ans, Ok(TypedValue::Float(5.0)));
 
             expr = Parser::parse_expr_string("!(5 > 3)").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Bool(false)));
+            assert_eq!(ans, Ok(TypedValue::Bool(false)));
 
             expr = Parser::parse_expr_string("10 & ~5").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(10)));
+            assert_eq!(ans, Ok(TypedValue::Int(10)));
 
             expr = Parser::parse_expr_string("(8 << 1) | (4 >> 1)").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(18)));
+            assert_eq!(ans, Ok(TypedValue::Int(18)));
 
             expr = Parser::parse_expr_string("-5 * -3").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(15)));
+            assert_eq!(ans, Ok(TypedValue::Int(15)));
         }
 
         #[test]
@@ -1108,86 +1108,86 @@ mod parsing_tests {
 
             expr = Parser::parse_expr_string("5 +\n3").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(5 + 3)));
+            assert_eq!(ans, Ok(TypedValue::Int(5 + 3)));
 
             expr = Parser::parse_expr_string("10 -\n4 /\n2").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(10 - 4 / 2)));
+            assert_eq!(ans, Ok(TypedValue::Int(10 - 4 / 2)));
 
             expr = Parser::parse_expr_string("(8 +\n2) * (3\n- 1)").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int((8 + 2) * (3 - 1))));
+            assert_eq!(ans, Ok(TypedValue::Int((8 + 2) * (3 - 1))));
 
             expr = Parser::parse_expr_string("-5\n+ 3").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(-5))); // newline should ignore the rest
+            assert_eq!(ans, Ok(TypedValue::Int(-5))); // newline should ignore the rest
 
             expr = Parser::parse_expr_string("-5 \\ \n+ 3").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(-5 + 3))); // backslash ignores newline
+            assert_eq!(ans, Ok(TypedValue::Int(-5 + 3))); // backslash ignores newline
 
             expr = Parser::parse_expr_string("!true\n|| false").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Bool(!true || false)));
+            assert_eq!(ans, Ok(TypedValue::Bool(!true || false)));
 
             expr = Parser::parse_expr_string("7 &\n3").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(7 & 3)));
+            assert_eq!(ans, Ok(TypedValue::Int(7 & 3)));
 
             expr = Parser::parse_expr_string("12 |\n5\n^ 6").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(12 | 5)));
+            assert_eq!(ans, Ok(TypedValue::Int(12 | 5)));
 
             // 12 |
             // (5
             //    ^ 6)
             expr = Parser::parse_expr_string("12 |\n(5\n^ 6)").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(12 | (5 ^ 6))));
+            assert_eq!(ans, Ok(TypedValue::Int(12 | (5 ^ 6))));
 
             expr = Parser::parse_expr_string("12 |\n5 ^\n6").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(12 | 5 ^ 6)));
+            assert_eq!(ans, Ok(TypedValue::Int(12 | 5 ^ 6)));
 
             expr = Parser::parse_expr_string("4 << \n 2").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(4 << 2)));
+            assert_eq!(ans, Ok(TypedValue::Int(4 << 2)));
 
             expr = Parser::parse_expr_string("~15\n& 7").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(!15)));
+            assert_eq!(ans, Ok(TypedValue::Int(!15)));
 
             expr = Parser::parse_expr_string("(~15\n& 7)").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(!15 & 7)));
+            assert_eq!(ans, Ok(TypedValue::Int(!15 & 7)));
 
             expr = Parser::parse_expr_string("-(-10)\n+ 5").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(-(-10))));
+            assert_eq!(ans, Ok(TypedValue::Int(-(-10))));
 
             expr = Parser::parse_expr_string("!(false)\n&& true").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Bool(!(false) && true)));
+            assert_eq!(ans, Ok(TypedValue::Bool(!(false) && true)));
 
             expr = Parser::parse_expr_string("(5 +\n3) &\n(2\n*\n4)").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int((5 + 3) & (2 * 4))));
+            assert_eq!(ans, Ok(TypedValue::Int((5 + 3) & (2 * 4))));
 
             expr = Parser::parse_expr_string("100\n/\n10\n+\n5 * 2").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(100)));
+            assert_eq!(ans, Ok(TypedValue::Int(100)));
 
             expr = Parser::parse_expr_string("(100\n/\n10\n+\n5 * 2)").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(100 / 10 + 5 * 2)));
+            assert_eq!(ans, Ok(TypedValue::Int(100 / 10 + 5 * 2)));
 
             expr = Parser::parse_expr_string("1 == 0 ? 1\n : 2").unwrap();
             ans = evaluate_static(&expr);
-            assert!(matches!(ans, Ok(Value::Int(2))));
+            assert!(matches!(ans, Ok(TypedValue::Int(2))));
 
             expr = Parser::parse_expr_string("true ? 5\n: 10").unwrap();
             ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(Value::Int(5)));
+            assert_eq!(ans, Ok(TypedValue::Int(5)));
         }
     }
 }

@@ -7,7 +7,7 @@ use crate::stmt_ast::*;
 use crate::types::*;
 
 pub mod opcodes {
-    use crate::{builtins::GLOBAL_FUNCS, codegen::OpCode, types::ValueType, values::{Function, Value}};
+    use crate::{builtins::GLOBAL_FUNCS, codegen::OpCode, types::ValueType, values::{Function, TypedValue}};
 
     pub fn disassemble(func: &Function) {
         
@@ -137,7 +137,7 @@ pub mod opcodes {
     }
 
     impl Reader<'_> {
-        fn constant(&mut self) -> &Value {
+        fn constant(&mut self) -> &TypedValue {
             let index = self.byte() as usize;
             self.func.constants.get(index).unwrap()
         }
@@ -253,7 +253,7 @@ impl ExprVisitor<'_, String> for AstPrinter {
         s
     }
 
-    fn visit_literal_expr(&mut self, _repr: &Token, val: &Value, _id: usize) -> String {
+    fn visit_literal_expr(&mut self, _repr: &Token, val: &TypedValue, _id: usize) -> String {
         if self.as_tree {
             format!("{}{:?}", ":   ".repeat(self.depth as usize), val)
         } else if val.is_type(&ValueType::String) {
@@ -355,13 +355,13 @@ impl DebugAstPrinter {
 
 struct StaticRunner;
 
-pub fn evaluate_static(expr: &Expr) -> Result<Value, DebugRuntimeError> {
+pub fn evaluate_static(expr: &Expr) -> Result<TypedValue, DebugRuntimeError> {
     // expr.accept(&mut StaticRunner)
     todo!()
 }
 
-fn coerce_types(val1: Value, val2: Value) -> Result<(Value, Value), DebugRuntimeError> {
-    use Value as V;
+fn coerce_types(val1: TypedValue, val2: TypedValue) -> Result<(TypedValue, TypedValue), DebugRuntimeError> {
+    use TypedValue as V;
     
     // Implicit casting cases:
     // string & any -> both string

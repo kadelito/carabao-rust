@@ -17,7 +17,7 @@ pub enum Expr {
     Get { obj: Box<Expr>, property: Token, id: usize },
     List { items: Vec<Expr>, id: usize },
     Variable { identifier: Token, id: usize },
-    Literal { repr: Token, val: Value, id: usize },
+    Literal { repr: Token, val: TypedValue, id: usize },
 }
 
 impl<'me, 'vis> Expr where 'me: 'vis {
@@ -100,5 +100,5 @@ pub trait ExprVisitor<'ast, T> {
     fn visit_variable_expr(&mut self,
         identifier: &'ast Token, id: usize) -> T;
     fn visit_literal_expr(&mut self,
-        repr: &'ast Token, val: &'ast Value, id: usize) -> T;
+        repr: &'ast Token, val: &'ast TypedValue, id: usize) -> T;
 }

@@ -155,7 +155,7 @@ struct TempFunction {
     name: String,
     params: Box<[ValueType]>,
     ret_type: ValueType,
-    constants: Vec<Value>,
+    constants: Vec<TypedValue>,
     code: Vec<u8>,
     lines: Vec<LineRLE>
 }
@@ -243,10 +243,10 @@ impl Generator {
         self.context.prev_line = token.line();
     }
 
-    fn constant(&mut self, value: Value) {
+    fn constant(&mut self, value: TypedValue) {
         match value {
-            Value::Bool(b) => self.write_instr(if b { OpCode::True } else { OpCode::False }),
-            Value::None => self.write_instr(OpCode::None),
+            TypedValue::Bool(b) => self.write_instr(if b { OpCode::True } else { OpCode::False }),
+            TypedValue::None => self.write_instr(OpCode::None),
             _ => {
                 self.write_instr(OpCode::Constant);
                 let index = self.context.function.constants.len();
@@ -422,7 +422,7 @@ impl StmtVisitor<'_, ()> for Generator {
         
         // Store new function in the heap and register
         // a pointer to it in the outer function's constants
-        self.constant(Value::Function(Rc::new(func)));
+        self.constant(TypedValue::Function(Rc::new(func)));
         if self.in_global_scope() {
             self.write_instr(OpCode::DefineGlobal);
         }
@@ -541,7 +541,7 @@ impl StmtVisitor<'_, ()> for Generator {
                 if let Some(arg) = arg {
                     // we already know this is a valid integer
                     let Expr::Literal { val, .. } = &**arg else { panic!() };
-                    let Value::Int(i) = val else { panic!() };
+                    let TypedValue::Int(i) = val else { panic!() };
                     loops_to_jump = *i as usize;
                 }
                 let jump = self.write_jump(OpCode::Jump);
@@ -569,7 +569,7 @@ impl StmtVisitor<'_, ()> for Generator {
                 if let Some(arg) = arg {
                     // we already know this is a valid integer
                     let Expr::Literal { val, .. } = &**arg else { panic!() };
-                    let Value::Int(i) = val else { panic!() };
+                    let TypedValue::Int(i) = val else { panic!() };
                     loops_to_jump = *i as usize;
                 }
                 let nth_loop_start = self.context.loop_starts[self.context.loop_starts.len() - loops_to_jump];
@@ -799,7 +799,7 @@ impl ExprVisitor<'_, ()> for Generator {
     }
 
     fn visit_literal_expr(&mut self,
-        repr: &Token, val: &Value, _id: usize) -> () {
+        repr: &Token, val: &TypedValue, _id: usize) -> () {
         self.update_loc(repr);
 
         // TODO loadByte for [-128, 127]

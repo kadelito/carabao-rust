@@ -1,6 +1,6 @@
 use std::{cell::RefCell, fmt::{Display, write}, rc::Rc};
 
-use crate::{codegen::{LineRLE, OpCode}, lexing::{Token, TokenType}, values::{Function, Value}};
+use crate::{codegen::{LineRLE, OpCode}, lexing::{Token, TokenType}, values::{Function, TypedValue}};
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum ValueType {
@@ -41,15 +41,15 @@ impl Display for ValueType {
 const TYPE_BYTE_OFFSET: u8 = 0x80;
 
 impl ValueType {
-    pub fn dummy(&self) -> Value {
+    pub fn dummy(&self) -> TypedValue {
         // TODO document this
         match self {
-            ValueType::Any => Value::Any(Box::new(Value::None)),
-            ValueType::Int => Value::Int(0),
-            ValueType::Float => Value::Float(0.0),
-            ValueType::Char => Value::Char('\0'),
-            ValueType::Bool => Value::Bool(false),
-            ValueType::String => Value::String(Rc::new(String::new())),
+            ValueType::Any => TypedValue::Any(Box::new(TypedValue::None)),
+            ValueType::Int => TypedValue::Int(0),
+            ValueType::Float => TypedValue::Float(0.0),
+            ValueType::Char => TypedValue::Char('\0'),
+            ValueType::Bool => TypedValue::Bool(false),
+            ValueType::String => TypedValue::String(Rc::new(String::new())),
             ValueType::Function { ret_type, params } => {
                 let func = Function {
                     name: String::new(),
@@ -63,10 +63,10 @@ impl ValueType {
                     ].into_boxed_slice(),
                     lines: Box::new([LineRLE { line: 0, count: 3 }]),
                 };
-                Value::Function(Rc::new(func))
+                TypedValue::Function(Rc::new(func))
             },
             ValueType::List(_)
-                => Value::List(Rc::new(RefCell::new(Vec::new()))),
+                => TypedValue::List(Rc::new(RefCell::new(Vec::new()))),
             ValueType::None => todo!(),
         }
     }

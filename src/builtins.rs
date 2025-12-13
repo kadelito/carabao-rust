@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use crate::values::{NativeFunction, Value};
+use crate::values::{NativeFunction, TypedValue};
 use crate::types::*;
 
 // TODO a better compile-time system for accessing globals than this
@@ -45,34 +45,34 @@ pub mod natives {
     use super::*;
     use std::io::Write;
 
-    pub fn print(args: &[Value]) -> Value {
+    pub fn print(args: &[TypedValue]) -> TypedValue {
         print!("{}", args[0]);
-        Value::None
+        TypedValue::None
     }
 
-    pub fn println(args: &[Value]) -> Value {
+    pub fn println(args: &[TypedValue]) -> TypedValue {
         println!("{}", args[0]);
-        Value::None
+        TypedValue::None
     }
 
-    pub fn clock(_args: &[Value]) -> Value {
+    pub fn clock(_args: &[TypedValue]) -> TypedValue {
         let t = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|dur| dur.as_millis() as i64)
             .unwrap_or(-1);
-        return Value::Int(t);
+        return TypedValue::Int(t);
     }
 
-    pub fn to_string(args: &[Value]) -> Value {
+    pub fn to_string(args: &[TypedValue]) -> TypedValue {
         let mut buf = Vec::new();
         write!(buf, "{}", args[0]).expect("writing to buffer should not fail??");
         let str = String::from_utf8(buf)
             .expect("i dont know how utf-8 works");
-        Value::from(str)
+        TypedValue::from(str)
     }
 
-    pub fn debug_str(args: &[Value]) -> Value {
-        let Value::Any(inner) = &args[0] else { panic!() };
+    pub fn debug_str(args: &[TypedValue]) -> TypedValue {
+        let TypedValue::Any(inner) = &args[0] else { panic!() };
         format!("{:?}", inner).into()
     }
 }

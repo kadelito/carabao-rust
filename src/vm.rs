@@ -81,8 +81,8 @@ pub fn run(function: Function) -> Result<(), ProgramError> {
 
 pub struct VM {
     call_stack: Vec<Frame>,
-    stack: Vec<Value>,
-    globals: Vec<Value>,
+    stack: Vec<TypedValue>,
+    globals: Vec<TypedValue>,
     /// During tests, this represents the instant of creation, not execution start.
     runtime_start: Instant,
     // TODO cached summons
@@ -119,7 +119,7 @@ enum SuccessStatus {
     End,      // Return from the execution loop.
 
     #[cfg(test)]
-    ReturnTop(Value), // Pause execution and return the top of the stack
+    ReturnTop(TypedValue), // Pause execution and return the top of the stack
 }
 
 impl VM {
@@ -134,36 +134,36 @@ impl VM {
         };
         new.call_stack.push(Frame::new(function, 0));
         for (_, obj) in GLOBAL_FUNCS {
-            new.globals.push(Value::from(obj));
+            new.globals.push(TypedValue::from(obj));
         }
         new
     }
 
     /// Runs until the status is `End` or `ReturnTop`.
     #[cfg(test)]
-    pub fn run_with_input(&mut self, input: Value) -> Result<Value, ProgramError> {
+    pub fn run_with_input(&mut self, input: TypedValue) -> Result<TypedValue, ProgramError> {
         loop {
             match self.cycle(&input)? {
                 SuccessStatus::Continue => {},
-                SuccessStatus::End => { return Ok(Value::None); },
+                SuccessStatus::End => { return Ok(TypedValue::None); },
                 SuccessStatus::ReturnTop(value) => { return Ok(value); },
             }
         }
     }
 
     #[cfg(test)]
-    pub fn run(&mut self) -> Result<Value, ProgramError> {
-        self.run_with_input(Value::None)
+    pub fn run(&mut self) -> Result<TypedValue, ProgramError> {
+        self.run_with_input(TypedValue::None)
     }
 
     #[cfg(not(test))]
     pub fn run(&mut self) -> Result<(), ProgramError> {
         self.runtime_start = Instant::now();
-        while self.cycle(&Value::None)? == SuccessStatus::Continue {}
+        while self.cycle(&TypedValue::None)? == SuccessStatus::Continue {}
         Ok(())
     }
 
-    fn cycle(&mut self, input: &Value) -> Result<SuccessStatus, ProgramError> {
+    fn cycle(&mut self, input: &TypedValue) -> Result<SuccessStatus, ProgramError> {
 
         macro_rules! pop_val {
             ($variant: ident) => { vm_pop_val!(self, $variant) }
@@ -201,9 +201,9 @@ impl VM {
 
         match instr {
             OpCode::Pass => {}
-            OpCode::None => self.stack.push(Value::None),
-            OpCode::True => self.stack.push(Value::Bool(true)),
-            OpCode::False => self.stack.push(Value::Bool(false)),
+            OpCode::None => self.stack.push(TypedValue::None),
+            OpCode::True => self.stack.push(TypedValue::Bool(true)),
+            OpCode::False => self.stack.push(TypedValue::Bool(false)),
             OpCode::Jump => {
                 let offset =  self.read_short() as i16;
                 self.top_frame().ip = self.top_frame().ip.strict_add_signed(offset as isize);
@@ -225,14 +225,14 @@ impl VM {
                 let num_args = self.read_byte() as usize;
                 let new_bottom = self.stack.len() - num_args - 1;
                 match self.stack_peek(num_args) {
-                    Value::Function(function) => {
+                    TypedValue::Function(function) => {
                         #[cfg(feature = "runtime_trace")]
                         {
                             println!("\t-->--> Entering {}", function.name);
                         }
                         self.call_stack.push(Frame { function, ip: 0, stack_bottom: new_bottom });
                     }
-                    Value::NativeFunc(function) => {
+                    TypedValue::NativeFunc(function) => {
                         let NativeFunction { func, .. } = function.as_ref();
                         let args = &self.stack[new_bottom + 1..];
                         let result = func(args);
@@ -290,24 +290,24 @@ impl VM {
             #[cfg(test)]
             OpCode::TESTYield => {
                 let value = self.stack_pop();
-                self.stack.push(Value::None);
+                self.stack.push(TypedValue::None);
                 return Ok(SuccessStatus::ReturnTop(value));
             }
             OpCode::List => {
                 let new_list_start = self.stack.len() - self.read_byte() as usize;
                 let list = self.stack.split_off(new_list_start);
-                self.stack.push(Value::from(list))
+                self.stack.push(TypedValue::from(list))
             }
             OpCode::IndexGet => {
                 let index = pop_val!(Int);
-                let Value::List(list) = self.stack_pop() else { panic!() };
+                let TypedValue::List(list) = self.stack_pop() else { panic!() };
                 let at_index = list.borrow()[index as usize].clone();
                 self.stack.push(at_index);
             }
             OpCode::IndexSet => {
                 // as usual, no popping bc set is an expression
                 let index = pop_val!(Int);
-                let Value::List(list) = self.stack_pop() else { panic!() };
+                let TypedValue::List(list) = self.stack_pop() else { panic!() };
                 let new_value = self.stack_peek(2);
                 list.borrow_mut()[index as usize] = new_value;
             }
@@ -321,7 +321,7 @@ impl VM {
             OpCode::AnyToString => todo!(),
             OpCode::IntToFloat => {
                 let f = pop_val!(Int) as f64;
-                self.stack.push(Value::Float(f));
+                self.stack.push(TypedValue::Float(f));
             }
             OpCode::IntToBool => todo!(),
             OpCode::CharToInt => todo!(),
@@ -329,17 +329,17 @@ impl VM {
             OpCode::BoolToFloat => todo!(),
             OpCode::WrapAny => {
                 let val = self.stack_pop();
-                self.stack.push(Value::Any(Box::new(val)));
+                self.stack.push(TypedValue::Any(Box::new(val)));
             }
             OpCode::ValEqual => {
                 let b = self.stack_pop();
                 let a = self.stack_pop();
-                self.stack.push(Value::Bool(a == b));
+                self.stack.push(TypedValue::Bool(a == b));
             },
             OpCode::Concat => {
-                let Value::String(s2) = self.stack_pop() else { panic!() };
-                let Value::String(s1) = self.stack_pop() else { panic!() };
-                self.stack.push(Value::from((*s1).clone() + s2.as_ref()));
+                let TypedValue::String(s2) = self.stack_pop() else { panic!() };
+                let TypedValue::String(s1) = self.stack_pop() else { panic!() };
+                self.stack.push(TypedValue::from((*s1).clone() + s2.as_ref()));
             },
             OpCode::FloatAdd => binary_op!(Float +: Float),
             OpCode::FloatSub => binary_op!(Float -: Float),
@@ -348,7 +348,7 @@ impl VM {
             OpCode::FloatMod => binary_op!(Float %: Float),
             OpCode::FloatNegate => {
                 let f = pop_val!(Float);
-                self.stack.push(Value::Float(-f));
+                self.stack.push(TypedValue::Float(-f));
             }
             OpCode::FloatLess => binary_op!(Float <: Bool),
             OpCode::FloatGreater => binary_op!(Float >: Bool),
@@ -364,17 +364,17 @@ impl VM {
             OpCode::IntShr => binary_op!(Int >>: Int),
             OpCode::IntNegate => {
                 let i = pop_val!(Int);
-                self.stack.push(Value::Int(-i));
+                self.stack.push(TypedValue::Int(-i));
             }
             OpCode::IntNot => {
                 let i = pop_val!(Int);
-                self.stack.push(Value::Int(!i));
+                self.stack.push(TypedValue::Int(!i));
             }
             OpCode::IntLess => binary_op!(Int <: Bool),
             OpCode::IntGreater => binary_op!(Int >: Bool),
             OpCode::BoolNot => {
                 let b = pop_val!(Bool);
-                self.stack.push(Value::Bool(!b));
+                self.stack.push(TypedValue::Bool(!b));
             }
         }
         #[cfg(feature = "runtime_trace")]
@@ -394,12 +394,12 @@ impl VM {
         self.call_stack.last_mut().unwrap()
     }
 
-    fn stack_pop(&mut self) -> Value {
+    fn stack_pop(&mut self) -> TypedValue {
         self.stack.pop().expect("Stack should not be empty.")
     }
 
     /// Clones the value on the stack at `dist` from the end.
-    fn stack_peek(&self, dist: usize) -> Value {
+    fn stack_peek(&self, dist: usize) -> TypedValue {
         self.stack[self.stack.len() - dist - 1].clone()
     }
 

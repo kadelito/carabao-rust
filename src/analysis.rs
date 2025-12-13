@@ -17,7 +17,7 @@ pub fn analyze(program: &Vec<Stmt>) -> Result<AnalysisResult, Vec<UsageError>> {
     resolver.globals = globals;
 
     for (name, obj) in GLOBAL_FUNCS {
-        resolver.declare_global((*name).to_owned(), Value::from(obj).get_type());
+        resolver.declare_global((*name).to_owned(), TypedValue::from(obj).get_type());
     }
 
     resolver.resolve(program)
@@ -391,7 +391,7 @@ impl<'ast> StmtVisitor<'ast, ()> for FunctionResolver<'ast> {
                         self.error_at_expr(arg, UsageError::InvalidLoopControl);
                         return;
                     };
-                    let Value::Int(i) = *val else {
+                    let TypedValue::Int(i) = *val else {
                         self.error_at_expr(arg, UsageError::InvalidLoopControl);
                         return;
                     };
@@ -412,7 +412,7 @@ impl<'ast> StmtVisitor<'ast, ()> for FunctionResolver<'ast> {
                 } else {
                     // cheat a little bit and fake an expression
                     self.expect_type(&ret_type,
-                        &Expr::Literal { repr: keyword.clone(), val: Value::None, id: 0 });   
+                        &Expr::Literal { repr: keyword.clone(), val: TypedValue::None, id: 0 });   
                 }
             }
             _ => panic!("Invalid token for keyword statement made it to analysis"),
@@ -708,7 +708,7 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
         }
     }
 
-    fn visit_literal_expr(&mut self, repr: &Token, val: &Value, _id: usize) -> ValueType {
+    fn visit_literal_expr(&mut self, repr: &Token, val: &TypedValue, _id: usize) -> ValueType {
         self.line = repr.line();
 
         self.value_count += 1;
