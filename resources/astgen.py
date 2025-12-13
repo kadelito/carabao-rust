@@ -12,6 +12,7 @@ Slice       = sequence: Expr | query: Expr
 Call        = callee: Expr | args: Vec<Expr>
 Method      = obj: Expr | method: Token | args: Vec<Expr>
 Get         = obj: Expr | property: Token
+List        = items: Vec<Expr>
 Variable    = identifier: Token
 Literal     = repr: Token | val: Value
 """.strip()
@@ -19,8 +20,9 @@ Literal     = repr: Token | val: Value
 Try         = try_block: Stmt | exception: Identifier | alias: Identifier | catch_block: Stmt
 Switch      = value: Expr | branches: Vec<(Expr, Stmt)>
 """
+# TODO switch statements are hard.. start with matching `any`?
 stmts = """
-Function    = ret_type: ValueType | name: Token | params: Vec<(Token, ValueType)> | body: Vec<Stmt> | id: usize
+Function    = ret_type: ValueType | name: Token | params: Vec<(Token, ValueType)> | body: Vec<Stmt>
 Summon      = path: Vec<Token> | alias: Option<Token> | id: usize
 Var         = name: Token | var_type: Option<ValueType> | val: Option<Box<Expr>>
 Block       = statements: Vec<Stmt>
@@ -52,7 +54,7 @@ def generate(name: str, desc: str, add_id = False):
     # define the enum's variants
     print("#[derive(Debug)]")
     print(f"pub enum {name} {{")
-    print( "    // TODO the commented-out ones")
+    print( "    // TO""DO the commented-out ones")
     for node in desc:
         print(f"    {node[0]}", end=" { ")
         for i, field in enumerate(node[1]):

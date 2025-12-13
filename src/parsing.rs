@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::{
     debug::expr_to_str,
     expr_ast::*,
@@ -22,6 +24,7 @@ pub struct Parser<'a> {
     next_id: usize,
     errors: Vec<ParseError>,
     panic_mode: bool,
+    strings: HashMap<String, Value>
 }
 
 const VALID_TYPES: [TokenType; 6] = {
@@ -51,6 +54,7 @@ impl<'a> From<Lexer<'a>> for Parser<'a> {
             next_id: 0,
             errors: Vec::new(),
             panic_mode: false,
+            strings: HashMap::new(),
         }
     }
 }
@@ -105,8 +109,7 @@ impl<'a> Parser<'a> {
                 let val_type = self.expect_type();
                 let param = self.expect_binding();
                 params.push((param, val_type));
-                // TODO default arguments
-                // TODO variable length arguments
+                // TODO variable length paramaters & default arguments
 
                 if !self.try_consume(TokenType::Comma) {
                     break;
@@ -245,11 +248,7 @@ impl<'a> Parser<'a> {
         };
         let body = Box::new(body);
 
-        Stmt::For {
-            var,
-            sequence,
-            body,
-        }
+        Stmt::For { var, sequence, body }
     }
 
     fn keyword_stmt(&mut self) -> Stmt {
@@ -392,6 +391,10 @@ impl<'a> Parser<'a> {
         )
     }
 
+    fn range(&mut self) -> Expr {
+        self.left_assoc_bin_series(Parser::bitwise_or, &[TokenType::DoubleDot])
+    }
+
     fn bitwise_or(&mut self) -> Expr {
         self.left_assoc_bin_series(Parser::bitwise_excl_or, &[TokenType::VertBar])
     }
@@ -477,6 +480,7 @@ impl<'a> Parser<'a> {
         ]) {
             self.skip_newlines();
             let op = self.take_prev();
+            // recursive bc right-associative
             let target = self.unary();
             return Expr::Unary {
                 op,
@@ -488,8 +492,8 @@ impl<'a> Parser<'a> {
         self.call_or_similar()
     }
 
-    /// `calls()`, `.gets`, `.methods()` and `indexing[]`
-    /// 
+    /// `calls()`, `.gets`, `.methods()` and `indexing[]`.
+    ///
     /// All are suffixes and obv the same precedence, so they go together
     fn call_or_similar(&mut self) -> Expr {
         // TODO named arguments
@@ -534,23 +538,24 @@ impl<'a> Parser<'a> {
     }
 
     fn primary(&mut self) -> Expr {
+        let id = self.new_id();
         if self.try_consume(TokenType::True) {
             return Expr::Literal {
                 repr: self.take_prev(),
                 val: Value::Bool(true),
-                id: self.new_id(),
+                id,
             };
         } else if self.try_consume(TokenType::False) {
             return Expr::Literal {
                 repr: self.take_prev(),
                 val: Value::Bool(false),
-                id: self.new_id(),
+                id,
             };
         } else if self.try_consume(TokenType::None) {
             return Expr::Literal {
                 repr: self.take_prev(),
                 val: Value::None,
-                id: self.new_id(),
+                id,
             };
         } else if self.try_consume(TokenType::IntLiteral) {
             let mut literal = self.take_prev();
@@ -564,7 +569,7 @@ impl<'a> Parser<'a> {
                     return Expr::Literal {
                         repr: literal,
                         val: Value::Int(i),
-                        id: self.new_id(),
+                        id,
                     };
                 }
                 Err(e) => {
@@ -584,7 +589,7 @@ impl<'a> Parser<'a> {
                     return Expr::Literal {
                         repr: literal,
                         val: Value::Float(f),
-                        id: self.new_id(),
+                        id,
                     };
                 }
                 Err(e) => {
@@ -594,55 +599,65 @@ impl<'a> Parser<'a> {
             }
         } else if self.try_consume(TokenType::StringLiteral) {
             let mut literal = self.take_prev();
-            let raw = literal.take_lexeme().unwrap();
-            let mut raw_chars = raw[1..raw.len() - 1].chars(); // trim quotes
-            let mut value = String::new();
+            let mut raw = literal.lexeme().unwrap().clone();
+            raw = raw[1..raw.len() - 1].to_owned();
+            if let Some(string) = self.strings.get(&raw) {
+                return Expr::Literal { repr: literal, val: string.clone(), id };
+            }
+            let mut raw_chars = raw.chars();
+            let mut val = String::new();
             while let Some(c) = raw_chars.next() {
                 if c == '\\' {
-                    let escaped = match raw_chars.next().expect("please") {
-                        '\\' => '\\',
-                        'n' => '\n',
-                        'r' => '\r',
-                        't' => '\t',
-                        '"' => '\"',
-                        _ => {
-                            self.error_at(&literal, ParseError::InvalidEscapeCharacter);
-                            '\\'
-                        },
+                    let char = if let Some(escaped) = raw_chars.next() {
+                        match escaped {
+                            '\\' => '\\',
+                            'n' => '\n',
+                            'r' => '\r',
+                            't' => '\t',
+                            '"' => '\"',
+                            _ => {
+                                self.error_at(&literal, ParseError::InvalidEscapeCharacter);
+                                '\\'
+                            },
+                        }
+                    } else {
+                        // This will (probably) never happen, 
+                        // but just in case '\' is the last character in the string
+                        // without another '\' preceding.
+                        '\\'
                     };
-                    value.push(escaped);
+                    val.push(char);
                 } else {
-                    value.push(c);
+                    val.push(c);
                 }
             }
-            value.shrink_to_fit();
-            let value = Value::from(value);
-            return Expr::Literal {
-                repr: literal,
-                val: value,
-                id: self.new_id(),
-            };
+            val.shrink_to_fit();
+            let val = Value::from(val);
+            
+            // it wasn't there before, so we insert it here with the formatted string
+            // Note that the pointer
+            self.strings.insert(raw, val.clone());
+            
+            return Expr::Literal { repr: literal, val, id }
         } else if self.try_consume(TokenType::CharLiteral) {
             let mut literal = self.take_prev();
             let lexeme = literal.take_lexeme().unwrap();
             let mut chars = lexeme.chars();
             chars.next(); // Consume opening quote
-            let value = Value::Char(chars.next().unwrap());
-            return Expr::Literal {
-                repr: literal,
-                val: value,
-                id: self.new_id(),
-            };
+            let val = Value::Char(chars.next().unwrap());
+            return Expr::Literal { repr: literal, val, id };
         } else if self.try_consume(TokenType::OpenParen) {
             let expr = self.expression(true);
             self.expect_because(TokenType::CloseParen, ParseError::ParenNotClosed);
             return expr;
+        } else if self.try_consume(TokenType::OpenBracket) {
+            let items = self.expr_list(TokenType::CloseBracket);
+            return Expr::List { items, id };
         } else if self.try_consume(TokenType::Identifier) {
             let identifier = self.take_prev();
-            return Expr::Variable {
-                identifier,
-                id: self.new_id(),
-            };
+            return Expr::Variable { identifier, id, };
+        } else if self.try_consume(TokenType::Func) {
+            todo!("Anonymous functions/lambdas")
         }
         self.error_at_next(ParseError::NoExpression);
         Expr::dummy()
@@ -662,13 +677,13 @@ impl<'a> Parser<'a> {
         while !self.at_end() {
             // newline doesnt count, we could be inside an expression
             if let Some(prev) = &self.prev
-                && *prev.kind() == TokenType::Semicolon
+                && prev.kind() == TokenType::Semicolon
             {
                 self.advance();
                 return;
             }
             match self.peek().kind() {
-                // TODO other statement starts
+                // TODO other statement starts?
                 TokenType::New
                 | TokenType::Summon
                 | TokenType::Func
@@ -698,9 +713,14 @@ impl<'a> Parser<'a> {
     }
 
     fn try_consume_type(&mut self) -> Option<ValueType> {
-        let _type = if self.try_consume_any(&VALID_TYPES) {
+        Some(if self.try_consume_any(&VALID_TYPES) {
             let token = self.take_prev();
-            ValueType::from_token(token.kind()).unwrap()
+            let mut intermediate = ValueType::from_token(token.kind()).unwrap();
+            while self.try_consume(TokenType::OpenBracket) {
+                self.expect(TokenType::CloseBracket);
+                intermediate = ValueType::List(Box::new(intermediate));
+            }
+            intermediate
         } else if self.try_consume(TokenType::Func) {
             self.expect(TokenType::OpenParen);
             let mut params = Vec::new();
@@ -726,8 +746,7 @@ impl<'a> Parser<'a> {
             ValueType::Function { ret_type, params }
         } else {
             return None
-        };
-        return Some(_type);
+        })
     }
 
     fn expect_type(&mut self) -> ValueType {
@@ -797,7 +816,7 @@ impl<'a> Parser<'a> {
     }
 
     fn check(&self, kind: TokenType) -> bool {
-        *self.peek().kind() == kind
+        self.peek().kind() == kind
     }
 
     fn check_any(&self, kinds: &[TokenType]) -> bool {
@@ -810,7 +829,7 @@ impl<'a> Parser<'a> {
     }
 
     fn at_end(&self) -> bool {
-        *self.peek().kind() == TokenType::EOF
+        self.peek().kind() == TokenType::EOF
     }
 
     fn take_prev(&mut self) -> Token {
@@ -936,7 +955,7 @@ mod parsing_tests {
         //  [1] [2] [3] EOF EOF EOF...
         //          (3)  ^
         assert!(tester.at_end());
-        assert_eq!(*tester.cur.kind(), TokenType::EOF);
+        assert_eq!(tester.cur.kind(), TokenType::EOF);
         assert_eq!(tester.prev, Some(make_token("3", 1)));
     }
 

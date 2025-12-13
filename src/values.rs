@@ -1,4 +1,4 @@
-use std::{any::Any, collections::{HashMap, HashSet}, fmt::{Debug, Display, Write}, rc::Rc, u32};
+use std::{any::Any, cell::RefCell, collections::{HashMap, HashSet}, fmt::{Debug, Display, Write}, rc::Rc, u32};
 
 use crate::{codegen::LineRLE, lexing::{Token, TokenType}};
 use crate::types::*;
@@ -15,6 +15,8 @@ pub enum Value {
     String(Rc<String>),
     Function(Rc<Function>),
     NativeFunc(Rc<NativeFunction>),
+    List(Rc<RefCell<Vec<Value>>>),
+    // Struct(Rc<RefCell<[Value]>>),
     None,
 }
 
@@ -51,21 +53,44 @@ impl Function {
 
 impl Debug for Function {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Function")
-            .field("name", &self.name)
-            .field("params", &self.params)
-            .field("ret_type", &self.ret_type)
-            .field("constants", &self.constants)
-            .finish()
+        let Self {
+            name,
+            params,
+            ret_type,
+            ..
+        } = self;
+        // so func sqrt[float]: sqrt
+        write!(f, "{:?}{:?} -> {:?}",
+            name,
+            params,
+            ret_type,
+        )
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(PartialEq)]
 pub struct NativeFunction {
     pub name: &'static str,
     pub params: &'static [ValueType],
     pub ret_type: ValueType,
     pub func: fn(&[Value]) ->  Value,
+}
+
+impl Debug for NativeFunction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            name,
+            params,
+            ret_type,
+            ..
+        } = self;
+        // so func sqrt[float]: sqrt
+        write!(f, "{:?}{:?} -> {:?}",
+            name,
+            params,
+            ret_type,
+        )
+    }
 }
 
 impl Display for Value {
@@ -86,6 +111,13 @@ impl Display for Value {
                 let NativeFunction { name, ret_type, .. } = &**native;
                 write!(f, "<func {name}(): {ret_type}>")
             }
+            Value::List(list) => {
+                write!(f, "[{}]", list.borrow().iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<String>>()
+                    .join(", ")
+                )
+            },
         }
     }
 }
@@ -108,6 +140,12 @@ impl From<NativeFunction> for Value {
     }
 }
 
+impl From<Vec<Value>> for Value {
+    fn from(value: Vec<Value>) -> Self {
+        Self::List(Rc::new(RefCell::new(value)))
+    }
+}
+
 impl Value {
     pub fn get_type(&self) -> ValueType {
         match self {
@@ -126,6 +164,7 @@ impl Value {
                 let NativeFunction { params, ret_type, .. } = &**function;
                 ValueType::Function { ret_type: Box::new(ret_type.clone()), params: params.clone().into() }
             }
+            Value::List(list) => todo!(),
         }
     }
 

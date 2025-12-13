@@ -7,7 +7,7 @@ use crate::stmt_ast::*;
 use crate::types::*;
 
 pub mod opcodes {
-    use crate::{builtins::GLOBAL_FUNCS, codegen::OpCode, types::ValueType, values::Function};
+    use crate::{builtins::GLOBAL_FUNCS, codegen::OpCode, types::ValueType, values::{Function, Value}};
 
     pub fn disassemble(func: &Function) {
         
@@ -36,14 +36,19 @@ pub mod opcodes {
             let opstr = format!("{op:?}");
             print!("{linestr} {:04} {opstr:<16} ", reader.ip - 1);
             match op {
-                OpCode::Pass
+                OpCode::DefineGlobal
+                | OpCode::Pass
                 | OpCode::None
                 | OpCode::True
                 | OpCode::False
                 | OpCode::Pop
                 | OpCode::Return
-                | OpCode::DefineGlobal
                 | OpCode::Crash
+                | OpCode::IndexGet
+                | OpCode::IndexSet
+                | OpCode::Slice
+                | OpCode::StrIndex
+                | OpCode::StrSlice
 
                 | OpCode::IntToFloat
                 | OpCode::BoolToFloat
@@ -85,22 +90,19 @@ pub mod opcodes {
                 // opcode description already printed,
                 // no more info so go to next line
                     => println!(),
-
                 #[cfg(test)]
                 OpCode::TESTTakeInput
                 | OpCode::TESTYield
                     // see above
                     => println!(),
-
                 OpCode::Constant => {
-                    let index = reader.byte() as usize;
-                    let con = reader.func.constants.get(index).unwrap();
-                    println!("{con:?}");
+                    println!("{:?}", reader.constant());
                 }
                 OpCode::GetLocal
                 | OpCode::SetLocal
                 | OpCode::SwapTop
-                | OpCode::Call => {
+                | OpCode::Call 
+                | OpCode::List => {
                     let b= reader.byte();
                     println!("{b:02}");
                 }
@@ -121,7 +123,7 @@ pub mod opcodes {
                     // cast to isize to satisfy rust
                     let new_index = reader.ip.strict_add_signed(offset as isize);
                     println!("to {new_index}");
-                },
+                }
             }
         }
         
@@ -135,6 +137,11 @@ pub mod opcodes {
     }
 
     impl Reader<'_> {
+        fn constant(&mut self) -> &Value {
+            let index = self.byte() as usize;
+            self.func.constants.get(index).unwrap()
+        }
+
         fn short(&mut self) -> u16 {
             let s = (self.byte() as u16) << 8;
             s | (self.byte() as u16)
@@ -316,6 +323,15 @@ impl ExprVisitor<'_, String> for AstPrinter {
         format!("{}.{}",
             self.to_str(obj),
             property.lexeme().unwrap()
+        )
+    }
+    
+    fn visit_list_expr(&mut self,
+        items: &'_ Vec<Expr>, _id: usize) -> String {
+        format!("[{}]", items.iter()
+            .map(|expr| self.to_str(&expr))
+            .collect::<Vec<String>>()
+            .join(", ")
         )
     }
 }

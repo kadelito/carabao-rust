@@ -1,6 +1,6 @@
-use std::{collections::HashMap, fmt::Display, rc::Rc};
+use std::{cell::RefCell, fmt::{Display, write}, rc::Rc};
 
-use crate::{analysis::AnalysisResult, codegen::{self, LineRLE, OpCode}, lexing::{Token, TokenType}, values::{self, Function, Value}};
+use crate::{codegen::{LineRLE, OpCode}, lexing::{Token, TokenType}, values::{Function, Value}};
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum ValueType {
@@ -13,10 +13,7 @@ pub enum ValueType {
     String,
     /// this is just generics all over again
     Function { ret_type: Box<ValueType>, params: Box<[ValueType]> },
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub enum ObjectType {
+    List(Box<ValueType>),
 }
 
 impl Display for ValueType {
@@ -36,6 +33,7 @@ impl Display for ValueType {
                         .map(|t| format!("{t}"))
                         .collect::<Vec<String>>()
                         .join(", ")),
+            ValueType::List(t) => write!(f, "{}[]", t.to_string()),
         }
     }
 }
@@ -67,11 +65,13 @@ impl ValueType {
                 };
                 Value::Function(Rc::new(func))
             },
+            ValueType::List(_)
+                => Value::List(Rc::new(RefCell::new(Vec::new()))),
             ValueType::None => todo!(),
         }
     }
 
-    pub fn from_token(value: &TokenType) -> Option<Self> {
+    pub fn from_token(value: TokenType) -> Option<Self> {
         match value {
             TokenType::Any => Some(Self::Any),
             TokenType::Int => Some(Self::Int),
@@ -105,11 +105,11 @@ impl ValueType {
             
     }
 
-    pub fn coerce_binary(type1: &ValueType, type2: &ValueType) -> Option<(ValueType, ValueType)> {
+    pub fn coerce_binary(type1: &ValueType, op: TokenType, type2: &ValueType) -> Option<(ValueType, ValueType)> {
         if type1 == type2 {
             // Already the same type
             Some((type1.clone(), (type2.clone())))
-        } else if [type1, type2].contains(&&ValueType::String) {
+        } else if op == TokenType::Plus && [type1, type2].contains(&&ValueType::String) {
             // val1 is a string
             Some((ValueType::String, ValueType::String))
         } else {

@@ -1,6 +1,7 @@
 use std::fmt::format;
 use std::iter::Map;
 use std::rc::Rc;
+use std::time::Instant;
 
 use crate::analysis::analyze;
 use crate::builtins::GLOBAL_FUNCS;
@@ -9,6 +10,36 @@ use crate::parsing::Parser;
 use crate::ProgramError;
 use crate::types::ValueType;
 use crate::values::*;
+
+const VM_STACK_CAPACITY: usize = 16384;
+const VM_CALLS_CAPACITY: usize = 256;
+
+macro_rules!  vm_pop_val {
+    ($vm: expr, $variant: ident) => {
+        if let Value::$variant(v) = $vm.stack_pop() { v }
+        else {
+            panic!("{} not on top of stack:\n{:?}", stringify!($variant), $vm.stack)
+        }
+    };
+}
+
+macro_rules!  vm_unwrap_any {
+    ($vm: expr, $variant: ident) => {{
+        if let Value::$variant(v) = *vm_pop_val!($vm, Any) {
+            $vm.stack.push(Value::$variant(v));
+        } else {
+            return Err($vm.runtime_error(RuntimeError::TypeError));
+        }
+    }};
+}
+
+macro_rules! vm_binary_op {
+    ($vm: expr, $variant: ident, $op: tt, $to: ident) => {{
+        let rhs = vm_pop_val!($vm, $variant);
+        let lhs = vm_pop_val!($vm, $variant);
+        $vm.stack.push(Value::$to(lhs $op rhs))
+    }};
+}
 
 pub fn interpret(src: &str) -> Result<(), ProgramError> {
 
@@ -40,14 +71,20 @@ pub fn from(src: &str) -> Result<VM, ProgramError> {
 }
 
 pub fn run(function: Function) -> Result<(), ProgramError> {
-    VM::new(function).run()
+    if cfg!(feature = "dont_run") {
+        Ok(())
+    } else {   
+        VM::new(function).run()
         .map(|_| ())
+    }
 }
 
 pub struct VM {
     call_stack: Vec<Frame>,
     stack: Vec<Value>,
     globals: Vec<Value>,
+    /// During tests, this represents the instant of creation, not execution start.
+    runtime_start: Instant,
     // TODO cached summons
     // modules: Map<std::path::Path, Value>
 
@@ -89,8 +126,9 @@ impl VM {
     pub fn new(function: Function) -> Self {
         let mut new = Self {
             call_stack: Vec::with_capacity(64),
-            stack: Vec::with_capacity(1024),
-            globals: Vec::with_capacity(64),
+            stack: Vec::with_capacity(VM_STACK_CAPACITY),
+            globals: Vec::with_capacity(VM_CALLS_CAPACITY),
+            runtime_start: Instant::now(),
             #[cfg(feature = "runtime_trace")]
             prev_line: 0
         };
@@ -101,7 +139,7 @@ impl VM {
         new
     }
 
-    /// Runs until it encounters a
+    /// Runs until the status is `End` or `ReturnTop`.
     #[cfg(test)]
     pub fn run_with_input(&mut self, input: Value) -> Result<Value, ProgramError> {
         loop {
@@ -120,11 +158,29 @@ impl VM {
 
     #[cfg(not(test))]
     pub fn run(&mut self) -> Result<(), ProgramError> {
+        self.runtime_start = Instant::now();
         while self.cycle(&Value::None)? == SuccessStatus::Continue {}
         Ok(())
     }
 
     fn cycle(&mut self, input: &Value) -> Result<SuccessStatus, ProgramError> {
+
+        macro_rules! pop_val {
+            ($variant: ident) => { vm_pop_val!(self, $variant) }
+        }
+
+        macro_rules! binary_op {
+            ($variant: ident $op: tt: $to: ident) => { vm_binary_op!(self, $variant, $op, $to) }
+        }
+
+        macro_rules! unwrap_any {
+            ($variant: ident) => { vm_unwrap_any!(self, $variant) }
+        }
+
+        if self.stack.len() >= VM_STACK_CAPACITY {
+            panic!("VM value stack overflow!");
+        }
+
         let byte = self.read_instruction();
         #[cfg(feature = "runtime_trace")]
         {
@@ -142,6 +198,7 @@ impl VM {
         let Some(instr) = byte else {
             return Err(self.runtime_error(RuntimeError::InvalidCode));
         };
+
         match instr {
             OpCode::Pass => {}
             OpCode::None => self.stack.push(Value::None),
@@ -152,7 +209,7 @@ impl VM {
                 self.top_frame().ip = self.top_frame().ip.strict_add_signed(offset as isize);
             }
             OpCode::JumpIfNot => {
-                let b = self.pop_bool();
+                let b = pop_val!(Bool);
                 let offset =  self.read_short() as i16;
                 if !b {
                     self.top_frame().ip = self.top_frame().ip.strict_add_signed(offset as isize);
@@ -225,89 +282,6 @@ impl VM {
                     self.stack.push(result);
                 }
             }
-            OpCode::IntToFloat => {
-                let f = self.pop_int() as f64;
-                self.stack.push(Value::Float(f));
-            }
-            OpCode::IntToBool => todo!(),
-            OpCode::CharToInt => todo!(),
-            OpCode::BoolToInt => todo!(),
-            OpCode::BoolToFloat => todo!(),
-            OpCode::WrapAny => {
-                let val = self.stack_pop();
-                self.stack.push(Value::Any(Box::new(val)));
-            }
-            OpCode::AnyToInt => {
-                let Value::Int(i) = self.pop_any() else {
-                    return Err(self.runtime_error(RuntimeError::TypeError));
-                };
-                self.stack.push(Value::Int(i));
-            }
-            OpCode::AnyToFloat => {
-                let Value::Float(v) = self.pop_any() else {
-                    return Err(self.runtime_error(RuntimeError::TypeError));
-                };
-                self.stack.push(Value::Float(v));
-            }
-            OpCode::AnyToBool => {
-                let Value::Bool(v) = self.pop_any() else {
-                    return Err(self.runtime_error(RuntimeError::TypeError));
-                };
-                self.stack.push(Value::Bool(v));
-            }
-            OpCode::AnyToChar => {
-                let Value::Char(v) = self.pop_any() else {
-                    return Err(self.runtime_error(RuntimeError::TypeError));
-                };
-                self.stack.push(Value::Char(v));
-            }
-            OpCode::AnyToString => {
-                let Value::String(v) = self.pop_any() else {
-                    return Err(self.runtime_error(RuntimeError::TypeError));
-                };
-                self.stack.push(Value::String(v));
-            }
-            OpCode::ValEqual => self.binary_val(|a, b| Value::Bool(a == b)),
-            OpCode::Concat => {
-                let Value::String(s2) = self.stack_pop() else { panic!() };
-                let Value::String(s1) = self.stack_pop() else { panic!() };
-                self.stack.push(Value::from((*s1).clone() + s2.as_ref()));
-            }
-            OpCode::FloatAdd => self.binary_float(|a, b| Value::Float(a + b)),
-            OpCode::FloatSub => self.binary_float(|a, b| Value::Float(a - b)),
-            OpCode::FloatMul => self.binary_float(|a, b| Value::Float(a * b)),
-            OpCode::FloatDiv => self.binary_float(|a, b| Value::Float(a / b)),
-            OpCode::FloatMod => self.binary_float(|a, b| Value::Float(a % b)),
-            OpCode::FloatNegate => {
-                let f = self.pop_float();
-                self.stack.push(Value::Float(-f));
-            }
-            OpCode::FloatLess => self.binary_float(|a, b| Value::Bool(a < b)),
-            OpCode::FloatGreater => self.binary_float(|a, b| Value::Bool(a > b)),
-            OpCode::IntAdd => self.binary_int(|a, b| Value::Int(a + b)),
-            OpCode::IntSub => self.binary_int(|a, b| Value::Int(a - b)),
-            OpCode::IntMul => self.binary_int(|a, b| Value::Int(a * b)),
-            OpCode::IntDiv => self.binary_int(|a, b| Value::Int(a / b)),
-            OpCode::IntMod => self.binary_int(|a, b| Value::Int(a % b)),
-            OpCode::IntAnd => self.binary_int(|a, b| Value::Int(a & b)),
-            OpCode::IntXor => self.binary_int(|a, b| Value::Int(a ^ b)),
-            OpCode::IntOr  => self.binary_int(|a, b| Value::Int(a | b)),
-            OpCode::IntShl => self.binary_int(|a, b| Value::Int(a << b)),
-            OpCode::IntShr => self.binary_int(|a, b| Value::Int(a >> b)),
-            OpCode::IntNegate => {
-                let i = self.pop_int();
-                self.stack.push(Value::Int(-i));
-            }
-            OpCode::IntNot => {
-                let i = self.pop_int();
-                self.stack.push(Value::Int(!i));
-            }
-            OpCode::IntLess => self.binary_int(|a, b| Value::Bool(a < b)),
-            OpCode::IntGreater => self.binary_int(|a, b| Value::Bool(a > b)),
-            OpCode::BoolNot => {
-                let b = self.pop_bool();
-                self.stack.push(Value::Bool(!b));
-            }
             OpCode::Crash => return Err(self.runtime_error(RuntimeError::ManualCrash)),
             #[cfg(test)]
             OpCode::TESTTakeInput => {
@@ -318,6 +292,89 @@ impl VM {
                 let value = self.stack_pop();
                 self.stack.push(Value::None);
                 return Ok(SuccessStatus::ReturnTop(value));
+            }
+            OpCode::List => {
+                let new_list_start = self.stack.len() - self.read_byte() as usize;
+                let list = self.stack.split_off(new_list_start);
+                self.stack.push(Value::from(list))
+            }
+            OpCode::IndexGet => {
+                let index = pop_val!(Int);
+                let Value::List(list) = self.stack_pop() else { panic!() };
+                let at_index = list.borrow()[index as usize].clone();
+                self.stack.push(at_index);
+            }
+            OpCode::IndexSet => {
+                // as usual, no popping bc set is an expression
+                let index = pop_val!(Int);
+                let Value::List(list) = self.stack_pop() else { panic!() };
+                let new_value = self.stack_peek(2);
+                list.borrow_mut()[index as usize] = new_value;
+            }
+            OpCode::Slice => todo!(),
+            OpCode::StrIndex => todo!(),
+            OpCode::StrSlice => todo!(),
+            OpCode::AnyToInt => unwrap_any!(Int),
+            OpCode::AnyToFloat => todo!(),
+            OpCode::AnyToBool => todo!(),
+            OpCode::AnyToChar => todo!(),
+            OpCode::AnyToString => todo!(),
+            OpCode::IntToFloat => {
+                let f = pop_val!(Int) as f64;
+                self.stack.push(Value::Float(f));
+            }
+            OpCode::IntToBool => todo!(),
+            OpCode::CharToInt => todo!(),
+            OpCode::BoolToInt => todo!(),
+            OpCode::BoolToFloat => todo!(),
+            OpCode::WrapAny => {
+                let val = self.stack_pop();
+                self.stack.push(Value::Any(Box::new(val)));
+            }
+            OpCode::ValEqual => {
+                let b = self.stack_pop();
+                let a = self.stack_pop();
+                self.stack.push(Value::Bool(a == b));
+            },
+            OpCode::Concat => {
+                let Value::String(s2) = self.stack_pop() else { panic!() };
+                let Value::String(s1) = self.stack_pop() else { panic!() };
+                self.stack.push(Value::from((*s1).clone() + s2.as_ref()));
+            },
+            OpCode::FloatAdd => binary_op!(Float +: Float),
+            OpCode::FloatSub => binary_op!(Float -: Float),
+            OpCode::FloatMul => binary_op!(Float *: Float),
+            OpCode::FloatDiv => binary_op!(Float /: Float),
+            OpCode::FloatMod => binary_op!(Float %: Float),
+            OpCode::FloatNegate => {
+                let f = pop_val!(Float);
+                self.stack.push(Value::Float(-f));
+            }
+            OpCode::FloatLess => binary_op!(Float <: Bool),
+            OpCode::FloatGreater => binary_op!(Float >: Bool),
+            OpCode::IntAdd => binary_op!(Int +: Int),
+            OpCode::IntSub => binary_op!(Int -: Int),
+            OpCode::IntMul => binary_op!(Int *: Int),
+            OpCode::IntDiv => binary_op!(Int /: Int),
+            OpCode::IntMod => binary_op!(Int %: Int),
+            OpCode::IntAnd => binary_op!(Int &: Int),
+            OpCode::IntXor => binary_op!(Int ^: Int),
+            OpCode::IntOr  => binary_op!(Int |: Int),
+            OpCode::IntShl => binary_op!(Int <<: Int),
+            OpCode::IntShr => binary_op!(Int >>: Int),
+            OpCode::IntNegate => {
+                let i = pop_val!(Int);
+                self.stack.push(Value::Int(-i));
+            }
+            OpCode::IntNot => {
+                let i = pop_val!(Int);
+                self.stack.push(Value::Int(!i));
+            }
+            OpCode::IntLess => binary_op!(Int <: Bool),
+            OpCode::IntGreater => binary_op!(Int >: Bool),
+            OpCode::BoolNot => {
+                let b = pop_val!(Bool);
+                self.stack.push(Value::Bool(!b));
             }
         }
         #[cfg(feature = "runtime_trace")]
@@ -343,52 +400,7 @@ impl VM {
 
     /// Clones the value on the stack at `dist` from the end.
     fn stack_peek(&self, dist: usize) -> Value {
-        self.stack.get(self.stack.len() - dist - 1).unwrap().clone()
-    }
-
-    /// Pops an `Any` value from the stack, returning the wrapped value.
-    /// Panics if the top value was not of type `Any`.
-    fn pop_any(&mut self) -> Value {
-        if let Value::Any(v) = self.stack_pop() { *v }
-        else { panic!() }
-    }
-
-    fn binary_float(&mut self, func: fn(f64, f64) -> Value) {
-        let b = self.pop_float();
-        let a = self.pop_float();
-        self.stack.push(func(a, b));
-    }
-
-
-    /// Pops a `Float` value from the stack, returning the primitive value.
-    /// Panics if the top value was not of type `Float`.
-    fn pop_float(&mut self) -> f64 {
-        if let Value::Float(f) = self.stack_pop() { f }
-        else { panic!() }
-    }
-
-    /// Pops a `Int` value from the stack, returning the primitive value.
-    /// Panics if the top value was not of type `Int`.
-    fn binary_int(&mut self, func: fn(i64, i64) -> Value) {
-        let b = self.pop_int();
-        let a = self.pop_int();
-        self.stack.push(func(a, b));
-    }
-
-    fn pop_int(&mut self) -> i64 {
-        if let Value::Int(i) = self.stack_pop() { i }
-        else { panic!() }
-    }
-
-    fn pop_bool(&mut self) -> bool {
-        if let Value::Bool(b) = self.stack_pop() { b }
-        else { panic!() }
-    }
-    
-    fn binary_val(&mut self, func: fn(Value, Value) -> Value) {
-        let b = self.stack_pop();
-        let a = self.stack_pop();
-        self.stack.push(func(a, b));
+        self.stack[self.stack.len() - dist - 1].clone()
     }
 
     fn runtime_error(&mut self, reason: RuntimeError) -> ProgramError {

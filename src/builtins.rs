@@ -4,10 +4,16 @@ use crate::values::{NativeFunction, Value};
 use crate::types::*;
 
 // TODO a better compile-time system for accessing globals than this
-pub const STR_FUNC_INDEX: u8 = 2;
+pub const STR_FUNC_INDEX: u8 = 0;
 
-pub const GLOBAL_FUNCS: [(&'static str, NativeFunction); 4] = {
+pub const GLOBAL_FUNCS: [(&'static str, NativeFunction); 5] = {
     [
+        ("__str", NativeFunction {
+            name: "str",
+            params: &[ValueType::Any],
+            ret_type: ValueType::String,
+            func: natives::to_string,
+        }),
         ("print", NativeFunction {
             name: "print",
             params: &[ValueType::Any],
@@ -20,14 +26,14 @@ pub const GLOBAL_FUNCS: [(&'static str, NativeFunction); 4] = {
             ret_type: ValueType::None,
             func: natives::println,
         }),
-        ("__str", NativeFunction {
-            name: "str",
-            params: &[ValueType::Any],
-            ret_type: ValueType::String,
-            func: natives::to_string,
+        ("clock", NativeFunction {
+            name: "clock",
+            params: &[],
+            ret_type: ValueType::Int,
+            func: natives::clock,
         }),
         ("__debug_val", NativeFunction {
-            name: "__debug_val",
+            name: "debug_val",
             params: &[ValueType::Any],
             ret_type: ValueType::String,
             func: natives::debug_str,
@@ -47,6 +53,14 @@ pub mod natives {
     pub fn println(args: &[Value]) -> Value {
         println!("{}", args[0]);
         Value::None
+    }
+
+    pub fn clock(_args: &[Value]) -> Value {
+        let t = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|dur| dur.as_millis() as i64)
+            .unwrap_or(-1);
+        return Value::Int(t);
     }
 
     pub fn to_string(args: &[Value]) -> Value {

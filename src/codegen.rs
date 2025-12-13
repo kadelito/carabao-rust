@@ -28,14 +28,20 @@ pub enum OpCode {
     JumpIfNot, // [ip offset][byte 2]
     Call, // # of arguments to parse
     SwapTop, // [stack index from end, 0 == len-1]
-    
+    List, // # length of list literal
+    IndexGet,
+    IndexSet,
+    Slice, // TODO is this necessary?
+    StrIndex,
+    StrSlice,
+
     // ========== Casts ==========
     IntToFloat,
     IntToBool,
     CharToInt,
     BoolToInt,
     BoolToFloat,
-    WrapAny,
+    WrapAny, // TODO replace with separate WrapAny instructions for every type
     AnyToInt,
     AnyToFloat,
     AnyToBool,
@@ -244,7 +250,11 @@ impl Generator {
             _ => {
                 self.write_instr(OpCode::Constant);
                 let index = self.context.function.constants.len();
-                self.write_byte(index as u8);
+                if index > u8::MAX.into() {
+                    todo!("ConstantLong instruction not implemented");
+                } else {
+                    self.write_byte(index as u8);
+                }
                 self.context.function.constants.push(value);
             }
         }
@@ -314,8 +324,8 @@ impl Generator {
         self.context.is_main && self.context.var_counts.len() == 1
     }
 
-    fn take_expr_type(&mut self, expr: &Expr) -> ValueType {
-        self.expr_types.remove(&expr.id())
+    fn take_expr_type(&mut self, expr: &Expr) -> &ValueType {
+        self.expr_types.get(&expr.id())
             .expect("Expression type should be present")
     }
 
@@ -345,7 +355,7 @@ impl Generator {
     /// Panics otherwise, as invalid coercions should be caught during analysis.
     fn code_expr_with_cast(&mut self, expected: &ValueType, expr: &Expr) {
         let expr_type = self.take_expr_type(expr);
-        if expr_type == *expected {
+        if expr_type == expected {
             self.code_expr_as_is(expr);
             return;
         }
@@ -416,6 +426,7 @@ impl StmtVisitor<'_, ()> for Generator {
         if self.in_global_scope() {
             self.write_instr(OpCode::DefineGlobal);
         }
+        
     }
 
     fn visit_summon_stmt(
@@ -510,6 +521,13 @@ impl StmtVisitor<'_, ()> for Generator {
 
         let start = self.context.function.code.len();
         self.begin_loop(start);
+        // TODO primitive sequence optimization?
+        // IDEA IDEA
+        // for i*2 in 0..10:
+        //     <<i // 0, 2, 4, ... 20? ok wait
+        // an internal counter still increments (slot of sequence + 1?)
+        // but `i` evaluates to the expression
+        // maybe multiplication optimizes to += factor?
         todo!();
         // self.end_loop();
     }
@@ -703,7 +721,7 @@ impl ExprVisitor<'_, ()> for Generator {
         expr: &Box<Expr>, new_type: &ValueType, id: usize) -> () {
         self.code_expr_as_is(expr);
         let old_type = self.take_expr_type(expr);
-        if old_type == *new_type {
+        if old_type == new_type {
             return;
         }
         let cast_byte = Self::cast_instr(&old_type, new_type)
@@ -751,7 +769,7 @@ impl ExprVisitor<'_, ()> for Generator {
         callee: &Box<Expr>, args: &Vec<Expr>, _id: usize) -> () {
         self.code_expr_as_is(callee);
         let params;
-        match self.take_expr_type(callee) {
+        match self.take_expr_type(callee).clone() {
             ValueType::Function { params: callee_params, .. } => {
                 params = callee_params;
             },
@@ -784,6 +802,7 @@ impl ExprVisitor<'_, ()> for Generator {
         repr: &Token, val: &Value, _id: usize) -> () {
         self.update_loc(repr);
 
+        // TODO loadByte for [-128, 127]
         self.constant(val.clone());
     }
     
@@ -818,8 +837,12 @@ impl ExprVisitor<'_, ()> for Generator {
     }
     
     fn visit_slice_expr(&mut self,
-        sequence: &'_ Box<Expr>, query: &'_ Box<Expr>, id: usize) -> () {
-        todo!()
+        sequence: &'_ Box<Expr>, query: &'_ Box<Expr>, _id: usize) -> () {
+        match self.take_expr_type(sequence) {
+            ValueType::String => todo!(),
+            ValueType::List(value_type) => todo!(),
+            t => panic!("{} type not sliceable", t)
+        }
     }
     
     fn visit_method_expr(&mut self,
@@ -830,5 +853,17 @@ impl ExprVisitor<'_, ()> for Generator {
     fn visit_get_expr(&mut self,
         obj: &'_ Box<Expr>, property: &'_ Token, id: usize) -> () {
         todo!()
+    }
+    
+    fn visit_list_expr(&mut self,
+        items: &'_ Vec<Expr>, id: usize) -> () {
+        // TODO IMPORTANT!!! prevent cycles in any[] pls
+        let ValueType::List(item_type) = self.expr_types[&id].clone()
+            else { panic!() };
+        for expr in items {
+            self.code_expr_with_cast(&item_type, expr);
+        }
+        self.write_instr(OpCode::List);
+        self.write_byte(items.len() as u8);
     }
 }

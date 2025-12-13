@@ -1,16 +1,1 @@
-func eval_false(): bool {
-    println("\tEvaluated false")
-    return false
-}
-func eval_true(): bool {
-    println("\tEvaluated true")
-    return true
-}
-println("true && false:")
-println((eval_true() && eval_false()))
-println("\nfalse && true:")
-println((eval_false() && eval_true()))
-println("\ntrue || false:")
-println((eval_true() || eval_false()))
-println("\nfalse || true:")
-println((eval_false() || eval_true()))
+print(["Hello world!", "youre here"])

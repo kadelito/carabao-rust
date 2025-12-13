@@ -550,8 +550,8 @@ impl Token {
         }
     }
 
-    pub fn kind(&self) -> &TokenType {
-        &self.kind
+    pub fn kind(&self) -> TokenType {
+        self.kind
     }
 
     /// Panics if the lexeme has already been taken.
@@ -651,7 +651,6 @@ impl Token {
     }
 }
 
-// TODO Implement the commented-out tokens
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub enum TokenType {
     // Single character
@@ -706,6 +705,7 @@ pub enum TokenType {
     Identifier,
 
     // Keywords
+    // TODO class/struct
     // Class, // im hesitant abt this one
     // Struct,
     New,
@@ -778,20 +778,20 @@ c - d \\
 ",
         );
         let tokens = tester.to_vec();
-        let types: Vec<&TokenType> = tokens.iter().map(|tkn| tkn.kind()).collect();
+        let types: Vec<TokenType> = tokens.iter().map(|tkn| tkn.kind()).collect();
 
         assert_eq!(types.len(), 7);
 
         assert_eq!(
             types,
             vec![
-                &TokenType::Identifier,
-                &TokenType::Plus,
-                &TokenType::Identifier,
-                &TokenType::Newline,
-                &TokenType::Identifier,
-                &TokenType::Minus,
-                &TokenType::Identifier,
+                TokenType::Identifier,
+                TokenType::Plus,
+                TokenType::Identifier,
+                TokenType::Newline,
+                TokenType::Identifier,
+                TokenType::Minus,
+                TokenType::Identifier,
             ]
         )
     }

@@ -36,7 +36,7 @@ fn main() -> Result<(), ProgramError> {
 fn run(config: &Config) -> Result<(), ProgramError> {
     let contents = fs::read_to_string(&config.filepath)
         .map_err(|_e| ProgramError::IOError)?;
-
+        
     vm::interpret(&contents)
 }
 
@@ -76,7 +76,6 @@ impl Config {
 #[cfg(test)]
 mod main_tests {
     use crate::values::Value;
-
     use super::*;
 
     #[test]
@@ -87,5 +86,59 @@ mod main_tests {
         <<(hello + world)
         "#).unwrap();
         assert_eq!(vm.run(), Ok(Value::from("Hello world!")));
+    }
+
+    #[test]
+    fn scopes_and_shadowing() {
+        let mut vm = vm::from(r#"
+        new x = 1
+        {
+            new x = 2
+            {
+                new x = 3
+                <<x
+                new x = 4
+                <<x
+            }
+            <<x
+        }
+        <<x
+        "#).unwrap();
+        assert_eq!(vm.run(), Ok(Value::Int(3)));
+        assert_eq!(vm.run(), Ok(Value::Int(4)));
+        assert_eq!(vm.run(), Ok(Value::Int(2)));
+        assert_eq!(vm.run(), Ok(Value::Int(1)));
+
+        let mut vm = vm::from(r#"
+        func get_x(): int {
+            return x
+        }
+        new x = 10
+        <<(get_x()) // 10
+        new x = 20
+        <<(get_x()) // references old x, still 10
+        "#).unwrap();
+        assert_eq!(vm.run(), Ok(Value::Int(10)));
+        assert_eq!(vm.run(), Ok(Value::Int(10)));
+    }
+
+    #[test]
+    fn euclidean_algorithm() {
+        let mut vm = vm::from(r#"
+        func gcd(int a, int b): int {
+            if b == 0: return a
+            new mod = a % b
+            return gcd(b, mod)
+        }
+        while true {
+            new a = >>0 // 0(int) is replaced with the input int
+            <<none // pause to load 'b' separately
+            new b = >>0
+            <<gcd(a, b)
+        }
+        "#).unwrap();
+        let _ = vm.run_with_input(Value::Int(259));
+        let gcd = vm.run_with_input(Value::Int(77)).unwrap();
+        assert_eq!(gcd, Value::Int(7));
     }
 }

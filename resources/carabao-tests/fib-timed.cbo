@@ -1,0 +1,31 @@
+func fib(int n): int {
+    if n <= 1: return n
+    return fib(n - 2) + fib(n - 1)
+}
+
+// Returns the amount of time it took
+// for fib(n) to complete in seconds.
+func test_fib(int n, bool print_num): float {
+    new start = clock()
+    new result = fib(n)
+    new end = clock()
+    if print_num
+        println("Fibonacci number " + n + ": " + result)
+    else
+        print("n = " + n + "; ")
+    new elapsed = (end - start) / 1000.0
+    println("Time elapsed: " + elapsed + "s")
+    return elapsed
+}
+
+new FIB_N = 47
+test_fib(FIB_N, true)
+
+new float total_sec = 0
+new n_tests = 0
+while n_tests < 5 {
+    total_sec = total_sec + test_fib(FIB_N, false)
+    n_tests = n_tests + 1
+}
+print("Average time: (over " + n_tests + " tests) ")
+println(total_sec / n_tests + "s")

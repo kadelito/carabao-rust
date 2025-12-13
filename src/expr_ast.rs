@@ -1,9 +1,10 @@
 use crate::lexing::Token;
-use crate::values::*;
 use crate::types::*;
+use crate::values::*;
 
 #[derive(Debug)]
 pub enum Expr {
+    // TODO the commented-out ones
     Conditional { condition: Box<Expr>, if_true: Box<Expr>, if_false: Box<Expr>, id: usize },
     Boolean { left: Box<Expr>, op: Token, right: Box<Expr>, id: usize },
     Binary { left: Box<Expr>, op: Token, right: Box<Expr>, id: usize },
@@ -14,13 +15,14 @@ pub enum Expr {
     Call { callee: Box<Expr>, args: Vec<Expr>, id: usize },
     Method { obj: Box<Expr>, method: Token, args: Vec<Expr>, id: usize },
     Get { obj: Box<Expr>, property: Token, id: usize },
+    List { items: Vec<Expr>, id: usize },
     Variable { identifier: Token, id: usize },
     Literal { repr: Token, val: Value, id: usize },
 }
 
 impl<'me, 'vis> Expr where 'me: 'vis {
     pub fn dummy() -> Self {
-        Self::Variable { identifier: Token::dummy(), id: 0 }
+        Self::List { items: Vec::new(), id: 0 }
     }
 
     pub fn id(&self) -> usize {
@@ -35,6 +37,7 @@ impl<'me, 'vis> Expr where 'me: 'vis {
             Self::Call { id, .. } => *id,
             Self::Method { id, .. } => *id,
             Self::Get { id, .. } => *id,
+            Self::List { id, .. } => *id,
             Self::Variable { id, .. } => *id,
             Self::Literal { id, .. } => *id,
         }
@@ -61,6 +64,8 @@ impl<'me, 'vis> Expr where 'me: 'vis {
                 visitor.visit_method_expr(obj, method, args, *id),
             Self::Get { obj, property, id } =>
                 visitor.visit_get_expr(obj, property, *id),
+            Self::List { items, id } =>
+                visitor.visit_list_expr(items, *id),
             Self::Variable { identifier, id } =>
                 visitor.visit_variable_expr(identifier, *id),
             Self::Literal { repr, val, id } =>
@@ -90,6 +95,8 @@ pub trait ExprVisitor<'ast, T> {
         obj: &'ast Box<Expr>, method: &'ast Token, args: &'ast Vec<Expr>, id: usize) -> T;
     fn visit_get_expr(&mut self,
         obj: &'ast Box<Expr>, property: &'ast Token, id: usize) -> T;
+    fn visit_list_expr(&mut self,
+        items: &'ast Vec<Expr>, id: usize) -> T;
     fn visit_variable_expr(&mut self,
         identifier: &'ast Token, id: usize) -> T;
     fn visit_literal_expr(&mut self,
