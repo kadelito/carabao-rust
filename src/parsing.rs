@@ -741,9 +741,8 @@ impl<'a> Parser<'a> {
                 ValueType::None
             };
 
-            let ret_type = Box::new(ret_type);
             let params = params.into_boxed_slice();
-            ValueType::Function { ret_type, params }
+            ValueType::Function(FunctionType { ret_type, params }.into())
         } else {
             return None
         })

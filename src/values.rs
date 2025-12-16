@@ -1,4 +1,4 @@
-use std::{any::Any, cell::RefCell, collections::{HashMap, HashSet}, fmt::{Debug, Display, Write}, rc::Rc, u32};
+use std::{any::Any, cell::RefCell, collections::{HashMap, HashSet}, fmt::{Debug, Display, Write, write}, mem::ManuallyDrop, rc::Rc, u32};
 
 use crate::{codegen::LineRLE, lexing::{Token, TokenType}};
 use crate::types::*;
@@ -16,8 +16,18 @@ pub enum TypedValue {
     Function(Rc<Function>),
     NativeFunc(Rc<NativeFunction>),
     List(Rc<RefCell<Vec<TypedValue>>>),
-    // Struct(Rc<RefCell<[Value]>>),
+    // Class(Rc<RefCell<[Value]>>),
     None,
+}
+
+// TODO this
+pub union RuntimeValue {
+    any: ManuallyDrop<Box<TypedValue>>,
+    // None
+    int: i64,
+    float: f64,
+    char: char,
+    bool: bool,
 }
 
 #[derive(PartialEq)]
@@ -99,7 +109,7 @@ impl Display for TypedValue {
             TypedValue::None => f.write_str("none"),
             TypedValue::Any(value) => Display::fmt(&value, f),
             TypedValue::Int(i) => f.write_str(&i.to_string()),
-            TypedValue::Float(flt) => f.write_str(&flt.to_string()),
+            TypedValue::Float(flt) => write!(f, "{:3.}", flt), // TODO better float formatting than this
             TypedValue::Char(c) => f.write_char(*c),
             TypedValue::Bool(b) => f.write_str(if *b { "true" } else { "false" }),
             TypedValue::String(s) => f.write_str(s),
@@ -158,11 +168,11 @@ impl TypedValue {
             TypedValue::String(_) => ValueType::String,
             TypedValue::Function(function) => {
                 let Function { params, ret_type, .. } = &**function;
-                ValueType::Function { ret_type: Box::new(ret_type.clone()), params: params.clone() }
+                ValueType::Function(FunctionType {ret_type: ret_type.clone(), params: params.clone()}.into())
             }
             TypedValue::NativeFunc(function) => {
                 let NativeFunction { params, ret_type, .. } = &**function;
-                ValueType::Function { ret_type: Box::new(ret_type.clone()), params: params.clone().into() }
+                ValueType::Function(FunctionType {ret_type: ret_type.clone(), params: (*params).into()}.into())
             }
             TypedValue::List(list) => ValueType::List(Box::new(
                 if let Some(first) = list.borrow().first() {

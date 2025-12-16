@@ -64,12 +64,13 @@ pub enum UsageError {
     TooManyConstants,
     TooManyArgs,
     CantIndexThat,
+    NotIterable,
 }
 
 struct FunctionResolver<'ast> {
     value_count: usize,
     line: u32,
-    ret_type: ValueType,
+    ret_type: ValueType, // TODO replace with an Option for inferrence (and in TempFunction)
     local_bindings: Vec<VarData>,
     depth: usize,
     is_global: bool,
@@ -82,7 +83,7 @@ struct FunctionResolver<'ast> {
 #[derive(Debug)]
 struct TempFunction<'ast> {
     name: &'ast str,
-    ret_type: &'ast ValueType,
+    ret_type: &'ast ValueType, // see previous TODO
     params: &'ast Vec<(Token, ValueType)>,
     body: &'ast Vec<Stmt>,
 }
@@ -309,7 +310,7 @@ impl<'ast> FunctionResolver<'ast> {
 
 impl<'ast> StmtVisitor<'ast, ()> for FunctionResolver<'ast> {
     fn visit_summon_stmt(&mut self, _path: &Vec<Token>, _alias: &Option<Token>, _id: usize) {
-        todo!() // TODO summons
+        /*TODO*/todo!("summons")
     }
 
     fn visit_var_stmt(&mut self, name: &Token, explicit_type: &Option<ValueType>, value: &'ast Option<Box<Expr>>) {
@@ -370,14 +371,27 @@ impl<'ast> StmtVisitor<'ast, ()> for FunctionResolver<'ast> {
         self.loop_depth -= 1;
     }
 
-    fn visit_for_stmt(&mut self, var: &Token, _sequence: &Box<Expr>, _body: &Box<Stmt>) {
+    fn visit_for_stmt(&mut self, var: &Token, sequence: &Box<Expr>, body: &'ast Box<Stmt>) {
 
         self.line = var.line();
 
-        // TODO an actual range or sequence type
-        // self.loop_depth += 1;
-        todo!("idk :3")
-        // self.loop_depth -= 1;
+        self.enter_scope();
+        let var_type = match self.resolve_expr(sequence) {
+            ValueType::String => ValueType::Char,
+            ValueType::Object(object_type) => todo!(),
+            ValueType::List(value_type) => *value_type,
+            _ => {
+                self.error_at_expr(sequence, UsageError::NotIterable);
+                ValueType::Any
+            }
+        };
+        self.declare_local(var.copy_ident(), var_type);
+
+        self.loop_depth += 1;
+        self.resolve_stmt(body);
+        self.loop_depth -= 1;
+
+        self.exit_scope();
     }
 
     fn visit_keyword_stmt(&mut self, keyword: &Token, arg: &Option<Box<Expr>>) {
@@ -481,6 +495,7 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
 
         let left = self.resolve_expr(left);
         let right = self.resolve_expr(right);
+        // TODO check overloaded
         let Some((both, _)) = ValueType::coerce_binary(&left, op.kind(), &right) else {
             self.error_at_token(op, UsageError::IncompatibleTypes);
             return ValueType::Any;
@@ -496,7 +511,7 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
         }
         // after this point, both are the same type
         match both {
-            ValueType::Any => todo!("any in binary operators"),
+            ValueType::Any => /*TODO*/todo!("any in binary operators"),
             ValueType::Int => match op.kind() {
                 TokenType::Plus
                 | TokenType::Minus
@@ -512,7 +527,7 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
                 | TokenType::Greater
                 | TokenType::GreaterEqual
                 | TokenType::LessEqual => ValueType::Bool,
-                TokenType::DoubleDot => todo!(), // TODO ranges
+                TokenType::DoubleDot => /*TODO*/todo!(), // TODO ranges
                 _ => {
                     self.error_at_token(op, UsageError::InvalidOperator);
                     ValueType::Int
@@ -528,7 +543,7 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
                 | TokenType::Greater
                 | TokenType::GreaterEqual
                 | TokenType::LessEqual => ValueType::Bool,
-                TokenType::DoubleDot => todo!(), // TODO ranges
+                TokenType::DoubleDot => /*TODO*/todo!(), // TODO ranges
                 _ => {
                     self.error_at_token(op, UsageError::InvalidOperator);
                     ValueType::Float
@@ -554,19 +569,32 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
                 | TokenType::DoubleGreater
                 | TokenType::GreaterEqual
                 | TokenType::LessEqual => ValueType::Bool,
-                TokenType::DoubleDot => todo!(), // TODO ranges
+                TokenType::DoubleDot => /*TODO*/todo!("String ranges?"),
+                _ => {
+                    self.error_at_token(op, UsageError::InvalidOperator);
+                    ValueType::String
+                }
+            },
+            ValueType::None => {
+                self.error_at_token(op, UsageError::InvalidOperator);
+                // assume binary collapses to one value of same type
+                ValueType::None
+            }
+            ValueType::List(value_type) => match op.kind() {
+                TokenType::Plus => ValueType::String,
+                TokenType::Less
+                | TokenType::Greater
+                | TokenType::DoubleLess
+                | TokenType::DoubleGreater
+                | TokenType::GreaterEqual
+                | TokenType::LessEqual => ValueType::Bool,
                 _ => {
                     self.error_at_token(op, UsageError::InvalidOperator);
                     ValueType::String
                 }
             },
             ValueType::Function { .. } => panic!("can't coerce to function??"),
-            ValueType::None => {
-                self.error_at_token(op, UsageError::InvalidOperator);
-                // assume binary collapses to one value of same type
-                ValueType::None
-            }
-            ValueType::List(value_type) => todo!("List concatenation"),
+            ValueType::Object { .. } => /*TODO*/todo!("Operator overloading?"),
         }
     }
 
@@ -577,7 +605,6 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
         assign_id: usize,
     ) -> ValueType {
         let val_type = self.resolve_expr(&value);
-        // rust i swear to god
         match &**assignee {
             Expr::Variable { identifier, id: var_id } => {
                 match self.get_var(identifier.lexeme().unwrap()) {
@@ -588,18 +615,40 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
                         self.globals.borrow_mut().final_data.expr_types.insert(*var_id, data.val_type.clone());
                         return data.val_type;
                     }
-                    None => self.error_at_expr(assignee, UsageError::UndefinedIdent),
+                    None => {
+                        self.error_at_expr(assignee, UsageError::UndefinedIdent);
+                        val_type
+                    },
                 }
             }
             Expr::Get { obj, property, .. } => {
-                todo!()
+                /*TODO*/todo!()
             }
             Expr::Slice { sequence, query, .. } => {
-                todo!()
+                let seq_type = self.resolve_expr(sequence);
+                self.expect_type(&ValueType::Int, query);
+                match seq_type {
+                    // TODO Overload slicing for objects?
+                    // maybe (a: int)[b: int] to apply bitmask?
+                    // (a & (1 << b) == 1)
+                    ValueType::String => ValueType::Char,
+                    // TODO string slice assignment?
+                    // str1[a..b] = str2 => str1[0..a] + str2 + str1[b..str1.len]
+                    ValueType::List(item_type) => {
+                        self.expect_resolved_type(&item_type, value, &val_type);
+                        *item_type
+                    },
+                    _ => {
+                        self.error_at_expr(sequence, UsageError::CantIndexThat);
+                        val_type
+                    },
+                }
             }
-            _ => self.error_at_expr(&assignee, UsageError::InvalidAssign),
+            _ => {
+                self.error_at_expr(&assignee, UsageError::InvalidAssign);
+                val_type
+            },
         }
-        val_type
     }
 
     fn visit_cast_expr(&mut self, expr: &Box<Expr>, new_type: &ValueType, _id: usize) -> ValueType {
@@ -650,12 +699,12 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
             self.error_at_expr(args.last().unwrap(), UsageError::TooManyArgs);
         }
         match self.resolve_expr(&callee) {
-            ValueType::Function { ret_type, params } => {
+            ValueType::Function(func) => {
                 let mut args_match = true;
-                if args.len() != params.len() {
+                if args.len() != func.params.len() {
                     self.error_at_expr(callee, UsageError::ParamMismatch);
                 } else {
-                    for (param, arg) in params.iter().zip(args.iter()) {
+                    for (param, arg) in func.params.iter().zip(args.iter()) {
                         let arg_type = self.resolve_expr(arg);
                         self.expect_resolved_type(param, arg, &arg_type);
                         if !ValueType::can_convert_type(&arg_type, param) {
@@ -668,14 +717,12 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
                     // everything is correct, resolve body
                     // find identifier first
                     let ident = match &**callee {
-                        // TODO other expressions that can eval to a func
-                        // anonymous?
                         Expr::Variable { identifier, .. } => identifier.copy_ident(),
-                        _ => String::new(),
+                        _ => /*TODO*/todo!("other expressions that can eval to func"),
                     };
                     self.finish_function_by_name(&ident);
                 }
-                *ret_type.clone()
+                func.ret_type.clone()
             }
             other => {
                 self.error_msg_at_expr(
@@ -731,15 +778,18 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
     fn visit_slice_expr(&mut self,
         sequence: &'_ Box<Expr>, query: &'_ Box<Expr>, id: usize) -> ValueType {
         let seq_type = self.resolve_expr(sequence);
-        return match seq_type {
+        let query_type = self.resolve_expr(query);
+        return match (seq_type, query_type) {
             // TODO Overload slicing for objects?
             // maybe (a: int)[b: int] to apply bitmask?
             // (a & (1 << b) == 1)
-            ValueType::String => todo!(),
-            ValueType::List(value_type) => todo!(),
-            _ => {
+            (ValueType::String, ValueType::Int) => { ValueType::Char },
+            (ValueType::List(item_type), ValueType::Int) => { *item_type },
+            // TODO actual slicing, not just indexing
+            // (_, ValueType::Range) => { *item_type },
+            (other_seq, _other_query) => {
                 self.error_at_expr(sequence, UsageError::CantIndexThat);
-                ValueType::Any
+                other_seq
             },
         }
     }
@@ -748,14 +798,16 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
         obj: &'_ Box<Expr>, method: &'_ Token, args: &'_ Vec<Expr>, id: usize) -> ValueType {
         self.line = method.line();
 
-        todo!()
+        /*TODO*/todo!("Methods")
     }
     
     fn visit_get_expr(&mut self,
         obj: &'_ Box<Expr>, property: &'_ Token, id: usize) -> ValueType {
         self.line = property.line();
 
-        todo!()
+        // let obj_type = self.resolve_expr(obj);
+
+        /*TODO*/todo!("Gets")
     }
     
     fn visit_list_expr(&mut self, items: &'_ Vec<Expr>, _id: usize) -> ValueType {

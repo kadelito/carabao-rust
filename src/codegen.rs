@@ -6,7 +6,13 @@ use std::{
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 
 use crate::{
-    analysis::{AnalysisResult, Binding}, builtins::STR_FUNC_INDEX, debug::opcodes::disassemble, expr_ast::{Expr, ExprVisitor}, lexing::{Token, TokenType}, stmt_ast::{Stmt, StmtVisitor}, types::*, values::*
+    analysis::{AnalysisResult, Binding},
+    builtins::STR_FUNC_INDEX,
+    debug::opcodes::disassemble,
+    expr_ast::{Expr, ExprVisitor},
+    lexing::{Token, TokenType},
+    stmt_ast::{Stmt, StmtVisitor},
+    types::*, values::*
 };
 
 #[derive(Debug, TryFromPrimitive, IntoPrimitive)]
@@ -56,7 +62,7 @@ pub enum OpCode {
     // ========== Arithmetic operators ==========
 
     ValEqual,
-    Concat,
+    StrConcat,
 
     // Floats
     FloatAdd,
@@ -111,7 +117,6 @@ pub fn generate(ast: &Vec<Stmt>, context: AnalysisResult) -> Function {
                 ValueType::None),
             true),
     };
-    generator.context.var_counts.push(0);
     for stmt in ast {
         generator.code_stmt(stmt);
     }
@@ -141,7 +146,7 @@ struct FunctionContext {
 impl FunctionContext {
     fn new(function: TempFunction, is_main: bool) -> Self {
         Self {
-            var_counts: Vec::new(),
+            var_counts: vec![0],
             loop_starts: Vec::new(),
             break_backlog: Vec::new(),
             is_main,
@@ -324,9 +329,14 @@ impl Generator {
         self.context.is_main && self.context.var_counts.len() == 1
     }
 
-    fn take_expr_type(&mut self, expr: &Expr) -> &ValueType {
+    fn get_expr_type(&mut self, expr: &Expr) -> &ValueType {
         self.expr_types.get(&expr.id())
             .expect("Expression type should be present")
+    }
+
+    fn get_type_from_id(&mut self, id: usize) -> &ValueType {
+        self.expr_types.get(&id)
+            .expect("The id's expression type should be present")
     }
 
     /// Tells `continue`s where to jump
@@ -354,7 +364,7 @@ impl Generator {
     /// Codes an expression, casting or converting to string if needed.
     /// Panics otherwise, as invalid coercions should be caught during analysis.
     fn code_expr_with_cast(&mut self, expected: &ValueType, expr: &Expr) {
-        let expr_type = self.take_expr_type(expr);
+        let expr_type = self.get_expr_type(expr);
         if expr_type == expected {
             self.code_expr_as_is(expr);
             return;
@@ -426,6 +436,7 @@ impl StmtVisitor<'_, ()> for Generator {
         if self.in_global_scope() {
             self.write_instr(OpCode::DefineGlobal);
         }
+        *self.context.var_counts.last_mut().unwrap() += 1;
         
     }
 
@@ -451,7 +462,7 @@ impl StmtVisitor<'_, ()> for Generator {
             (None, None) => {
                 self.write_instr(OpCode::None);
                 self.write_instr(OpCode::WrapAny);
-            },
+            }
             (None, Some(val)) => self.code_expr_as_is(val),
             (Some(var), None) => 
                 self.constant(var.dummy()),
@@ -462,6 +473,7 @@ impl StmtVisitor<'_, ()> for Generator {
         if self.in_global_scope() {
             self.write_instr(OpCode::DefineGlobal);
         }
+        *self.context.var_counts.last_mut().unwrap() += 1;
     }
 
     fn visit_block_stmt(&mut self, statements: &Vec<Stmt>) -> () {
@@ -584,7 +596,7 @@ impl StmtVisitor<'_, ()> for Generator {
                     None => self.write_instr(OpCode::None),
                 }
                 self.write_instr(OpCode::Return);
-            },
+            }
             _ => panic!()
         }
     }
@@ -639,14 +651,14 @@ impl ExprVisitor<'_, ()> for Generator {
                 TokenType::GreaterEqual => {
                     self.write_instr(OpCode::IntLess);
                     self.write_instr(OpCode::BoolNot);
-                },
+                }
                 TokenType::LessEqual => {
                     self.write_instr(OpCode::IntGreater);
                     self.write_instr(OpCode::BoolNot);
-                },
+                }
                 TokenType::DoubleDot => todo!(),
                 _ => panic!("Invalid operator made it to codegen")
-            },
+            }
             ValueType::Float => match op.kind() {
                 TokenType::Plus => self.write_instr(OpCode::FloatAdd),
                 TokenType::Minus => self.write_instr(OpCode::FloatSub),
@@ -658,27 +670,27 @@ impl ExprVisitor<'_, ()> for Generator {
                 TokenType::GreaterEqual => {
                     self.write_instr(OpCode::FloatLess);
                     self.write_instr(OpCode::BoolNot);
-                },
+                }
                 TokenType::LessEqual => {
                     self.write_instr(OpCode::FloatGreater);
                     self.write_instr(OpCode::BoolNot);
-                },
+                }
                 TokenType::DoubleDot => todo!(),
                 _ => panic!("Invalid operator made it to codegen")
-            },
+            }
             ValueType::Bool => panic!("Boolean operands should be in Expr::Logical"),
             ValueType::String => match op.kind() {
-                TokenType::Plus => self.write_instr(OpCode::Concat),
+                TokenType::Plus => self.write_instr(OpCode::StrConcat),
                 TokenType::Less => self.write_instr(OpCode::FloatLess),
                 TokenType::Greater => self.write_instr(OpCode::FloatGreater),
                 TokenType::GreaterEqual => {
                     self.write_instr(OpCode::FloatLess);
                     self.write_instr(OpCode::BoolNot);
-                },
+                }
                 TokenType::LessEqual => {
                     self.write_instr(OpCode::FloatGreater);
                     self.write_instr(OpCode::BoolNot);
-                },
+                }
                 _ => panic!("Invalid operator made it to codegen")
             }
             _ => panic!("Invalid type made it to codegen")
@@ -686,14 +698,17 @@ impl ExprVisitor<'_, ()> for Generator {
     }
 
     fn visit_assign_expr(&mut self, assignee: &Box<Expr>, value: &Box<Expr>, id: usize) -> () {
-        let assignee_type = self.expr_types.remove(&assignee.id())
-            .expect("Assignee type should be recorded during analysis");
-        self.code_expr_with_cast(&assignee_type, value);
+        let final_type = self.get_type_from_id(id).clone();
+        self.code_expr_with_cast(&final_type, value);
         match &**assignee {
             Expr::Slice { sequence, query, .. } => {
                 self.code_expr_as_is(sequence);
                 self.code_expr_as_is(query);
-                todo!()
+                // stack atp: [...value, sequence, query]
+                match self.get_expr_type(sequence) {
+                    ValueType::List(_) => self.write_instr(OpCode::IndexSet),
+                    _ => panic!("Invalid slicee made it to codegen"),
+                }
             }
             Expr::Get { obj, id, .. } => {
                 self.code_expr_as_is(obj);
@@ -706,11 +721,11 @@ impl ExprVisitor<'_, ()> for Generator {
                     Binding::Stack(index) => {
                         self.write_instr(OpCode::SetLocal);
                         self.write_byte(index as u8);
-                    },
+                    }
                     Binding::Globals(index) => {
                         self.write_instr(OpCode::SetGlobal);
                         self.write_byte(index as u8);
-                    },
+                    }
                 }
             }
             _ => panic!("Invalid assign target made it to codegen")
@@ -720,7 +735,7 @@ impl ExprVisitor<'_, ()> for Generator {
     fn visit_cast_expr(&mut self,
         expr: &Box<Expr>, new_type: &ValueType, id: usize) -> () {
         self.code_expr_as_is(expr);
-        let old_type = self.take_expr_type(expr);
+        let old_type = self.get_expr_type(expr);
         if old_type == new_type {
             return;
         }
@@ -737,7 +752,7 @@ impl ExprVisitor<'_, ()> for Generator {
             TokenType::DoubleGreater => {
                 self.write_instr(OpCode::TESTTakeInput);
                 return;
-            },
+            }
             TokenType::DoubleLess => {
                 self.code_expr_as_is(target);
                 self.write_instr(OpCode::TESTYield);
@@ -747,20 +762,20 @@ impl ExprVisitor<'_, ()> for Generator {
         }
         #[cfg(not(test))]
         self.code_expr_as_is(target);
-        match self.take_expr_type(target) {
+        match self.get_expr_type(target) {
             ValueType::Int => match op.kind() {
                 TokenType::Tilde => self.write_instr(OpCode::IntNot),
                 TokenType::Minus => self.write_instr(OpCode::IntNegate),
                 _ => panic!("Invalid operator made it to codegen")
-            },
+            }
             ValueType::Float => match op.kind() {
                 TokenType::Minus => self.write_instr(OpCode::FloatNegate),
                 _ => panic!("Invalid operator made it to codegen")
-            },
+            }
             ValueType::Bool => match op.kind() {
                 TokenType::Bang => self.write_instr(OpCode::BoolNot),
                 _ => panic!("Invalid operator made it to codegen")
-            },
+            }
             _ => panic!("Invalid type made it to codegen")
         }
     }
@@ -769,10 +784,10 @@ impl ExprVisitor<'_, ()> for Generator {
         callee: &Box<Expr>, args: &Vec<Expr>, _id: usize) -> () {
         self.code_expr_as_is(callee);
         let params;
-        match self.take_expr_type(callee).clone() {
-            ValueType::Function { params: callee_params, .. } => {
-                params = callee_params;
-            },
+        match self.get_expr_type(callee).clone() {
+            ValueType::Function(func) => {
+                params = func.params;
+            }
             _ => panic!()
         }
         // We know the arg & param length are the same
@@ -838,10 +853,14 @@ impl ExprVisitor<'_, ()> for Generator {
     
     fn visit_slice_expr(&mut self,
         sequence: &'_ Box<Expr>, query: &'_ Box<Expr>, _id: usize) -> () {
-        match self.take_expr_type(sequence) {
-            ValueType::String => todo!(),
-            ValueType::List(value_type) => todo!(),
-            t => panic!("{} type not sliceable", t)
+        let seq_type = self.get_expr_type(sequence).clone();
+        let query_type = self.get_expr_type(query).clone();
+        self.code_expr_as_is(sequence);
+        self.code_expr_as_is(query);
+        match (seq_type, query_type) {
+            (ValueType::String, ValueType::Int) => self.write_instr(OpCode::StrIndex),
+            (ValueType::List(_), ValueType::Int) => self.write_instr(OpCode::IndexGet),
+            _ => panic!("Unsliceable type made it to codegen")
         }
     }
     

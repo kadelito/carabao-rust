@@ -6,7 +6,7 @@ func fib(int n): int {
 // Returns the amount of time it took
 // for fib(n) to complete in seconds.
 func test_fib(int n, bool print_num): float {
-    new start = clock()
+    new start = clock() // returns the milliseconds since the unix epoch
     new result = fib(n)
     new end = clock()
     if print_num
@@ -18,13 +18,14 @@ func test_fib(int n, bool print_num): float {
     return elapsed
 }
 
-new FIB_N = 40
-test_fib(FIB_N, true)
 
-new float total_sec = 0
+new FIB_N = 25
+new TEST_COUNT = 5
+
+new total_sec = 0.0
 new n_tests = 0
 while n_tests < 5 {
-    total_sec = total_sec + test_fib(FIB_N, false)
+    total_sec = total_sec + test_fib(FIB_N, n_tests == 0)
     n_tests = n_tests + 1
 }
 print("Average time: (over " + n_tests + " tests) ")

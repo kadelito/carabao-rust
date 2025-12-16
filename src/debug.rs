@@ -63,7 +63,7 @@ pub mod opcodes {
                 | OpCode::AnyToString
 
                 | OpCode::ValEqual
-                | OpCode::Concat
+                | OpCode::StrConcat
                 | OpCode::FloatAdd
                 | OpCode::FloatSub
                 | OpCode::FloatMul

@@ -137,8 +137,43 @@ mod main_tests {
             <<gcd(a, b)
         }
         "#).unwrap();
-        let _ = vm.run_with_input(TypedValue::Int(259));
-        let gcd = vm.run_with_input(TypedValue::Int(77)).unwrap();
-        assert_eq!(gcd, TypedValue::Int(7));
+        let mut gcd_assert = |a: i64, b: i64, gcd: i64| {
+            let _ = vm.run_with_input(TypedValue::Int(259));
+            let gcd = vm.run_with_input(TypedValue::Int(77)).unwrap();
+            assert_eq!(gcd, TypedValue::Int(7));
+        };
+        gcd_assert(259, 77, 77);
+    }
+
+    #[test]
+    fn stack_consistency() {
+        let mut vm = vm::from(r#"
+        {
+            new x = 1
+            <<x
+            {
+                new x = 2
+                <<x
+            }
+            new _ = "pad out the stack"
+            {
+                <<x
+                new x = 3
+                <<x
+            }
+            new x = 4
+            {
+                <<x
+                new x = 5
+                <<x
+            }
+        }
+        "#).unwrap();
+        assert_eq!(vm.run(), Ok(TypedValue::Int(1)));
+        assert_eq!(vm.run(), Ok(TypedValue::Int(2)));
+        assert_eq!(vm.run(), Ok(TypedValue::Int(1)));
+        assert_eq!(vm.run(), Ok(TypedValue::Int(3)));
+        assert_eq!(vm.run(), Ok(TypedValue::Int(4)));
+        assert_eq!(vm.run(), Ok(TypedValue::Int(5)));
     }
 }

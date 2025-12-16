@@ -12,8 +12,20 @@ pub enum ValueType {
     Bool,
     String,
     /// this is just generics all over again
-    Function { ret_type: Box<ValueType>, params: Box<[ValueType]> },
+    Function(Box<FunctionType>),
+    Object(Box<ObjectType>),
     List(Box<ValueType>),
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct FunctionType {
+    pub ret_type: ValueType,
+    pub params: Box<[ValueType]>
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct ObjectType {
+    
 }
 
 impl Display for ValueType {
@@ -26,14 +38,15 @@ impl Display for ValueType {
             ValueType::Char => write!(f, "char"),
             ValueType::Bool => write!(f, "bool"),
             ValueType::String => write!(f, "string"),
-            ValueType::Function { ret_type, params } =>
+            ValueType::Function( func )=>
                 write!(f, "func({1}): {0}",
-                    ret_type,
-                    params.iter()
+                    func.ret_type,
+                    func.params.iter()
                         .map(|t| format!("{t}"))
                         .collect::<Vec<String>>()
                         .join(", ")),
             ValueType::List(t) => write!(f, "{}[]", t.to_string()),
+            ValueType::Object(object_type) => todo!(),
         }
     }
 }
@@ -50,12 +63,12 @@ impl ValueType {
             ValueType::Char => TypedValue::Char('\0'),
             ValueType::Bool => TypedValue::Bool(false),
             ValueType::String => TypedValue::String(Rc::new(String::new())),
-            ValueType::Function { ret_type, params } => {
+            ValueType::Function(func) => {
                 let func = Function {
                     name: String::new(),
-                    params: params.clone(),
-                    ret_type: *ret_type.clone(),
-                    constants: Box::new([ret_type.dummy()]),
+                    params: func.params.clone(),
+                    ret_type: func.ret_type.clone(),
+                    constants: Box::new([func.ret_type.dummy()]),
                     code: vec![
                         // return dummy value from constants
                         OpCode::Constant.into(), 0,
@@ -66,8 +79,9 @@ impl ValueType {
                 TypedValue::Function(Rc::new(func))
             },
             ValueType::List(_)
-                => TypedValue::List(Rc::new(RefCell::new(Vec::new()))),
-            ValueType::None => todo!(),
+            => TypedValue::List(Rc::new(RefCell::new(Vec::new()))),
+            ValueType::Object(object_type) => todo!(),
+            ValueType::None => TypedValue::None,
         }
     }
 
@@ -124,12 +138,12 @@ impl ValueType {
     }
 
     pub fn func_type(ret_type: &ValueType, params: &Vec<(Token, ValueType)>) -> Self {
-        Self::Function {
-            ret_type: Box::new(ret_type.clone()),
+        Self::Function(FunctionType {
+            ret_type: ret_type.clone(),
             params: params.iter()
                 .map(|(_, tp)| tp.clone())
                 .collect::<Vec<ValueType>>()
                 .into_boxed_slice()
-        }
+        }.into())
 }
 }
