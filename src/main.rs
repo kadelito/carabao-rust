@@ -9,12 +9,13 @@ mod debug;
 mod values;
 mod analysis;
 mod codegen;
-mod builtins;
 mod types;
+mod standard_library;
 
 use std::{env, fs, process};
 
 use crate::{analysis::UsageError, debug::DebugRuntimeError, parsing::ParseError, vm::RuntimeError};
+use crate::standard_library::registry;
 
 fn main() -> Result<(), ProgramError> {
     // vm::main();

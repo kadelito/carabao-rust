@@ -12,7 +12,8 @@ pub enum TypedValue {
     Bool(bool),
     // Note that .clone is on the REFERENCE of objects
     // PartialEq compares object values, though
-    String(Rc<String>),
+    String(Rc<[u16]>),
+    Range(Rc<(TypedValue, TypedValue)>),
     Function(Rc<Function>),
     NativeFunc(Rc<NativeFunction>),
     List(Rc<RefCell<Vec<TypedValue>>>),
@@ -20,7 +21,7 @@ pub enum TypedValue {
     None,
 }
 
-// TODO this
+// TODO unions
 pub union RuntimeValue {
     any: ManuallyDrop<Box<TypedValue>>,
     // None
@@ -28,6 +29,11 @@ pub union RuntimeValue {
     float: f64,
     char: char,
     bool: bool,
+    string: ManuallyDrop<Rc<[u16]>>,
+    range: ManuallyDrop<Rc<(TypedValue, TypedValue)>>,
+    function: ManuallyDrop<Rc<Function>>,
+    native_func: ManuallyDrop<Rc<NativeFunction>>,
+    list: ManuallyDrop<Rc<RefCell<Vec<TypedValue>>>>,
 }
 
 #[derive(PartialEq)]
@@ -60,7 +66,6 @@ impl Function {
         }
     }
 }
-
 impl Debug for Function {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Self {
@@ -112,13 +117,19 @@ impl Display for TypedValue {
             TypedValue::Float(flt) => write!(f, "{:3.}", flt), // TODO better float formatting than this
             TypedValue::Char(c) => f.write_char(*c),
             TypedValue::Bool(b) => f.write_str(if *b { "true" } else { "false" }),
-            TypedValue::String(s) => f.write_str(s),
+            TypedValue::String(s) => f.write_str(
+                &String::from_utf16_lossy(&s)
+            ),
+            TypedValue::Range(range) => {
+                let (start, end) = range.as_ref();
+                write!(f, "[{start}...{end}]")
+            }
             TypedValue::Function(function) => {
-                let Function { name, ret_type, .. } = &**function;
+                let Function { name, ret_type, .. } = function.as_ref();
                 write!(f, "<func {name}(): {ret_type}>")
             }
             TypedValue::NativeFunc(native) => {
-                let NativeFunction { name, ret_type, .. } = &**native;
+                let NativeFunction { name, ret_type, .. } = native.as_ref();
                 write!(f, "<func {name}(): {ret_type}>")
             }
             TypedValue::List(list) => {
@@ -134,13 +145,18 @@ impl Display for TypedValue {
 
 impl From<String> for TypedValue {
     fn from(value: String) -> Self {
-        Self::String(Rc::new(value))
+        let utf16_chars = value
+            .encode_utf16()
+            .collect::<Vec<u16>>()
+            .into_boxed_slice()
+            .into();
+        Self::String(utf16_chars)
     }
 }
 
 impl From<&str> for TypedValue {
     fn from(value: &str) -> Self {
-        Self::String(Rc::new(value.to_owned()))
+        value.to_owned().into()
     }
 }
 
@@ -166,13 +182,14 @@ impl TypedValue {
             TypedValue::Char(_) => ValueType::Char,
             TypedValue::Bool(_) => ValueType::Bool,
             TypedValue::String(_) => ValueType::String,
+            TypedValue::Range(_) => todo!(),
             TypedValue::Function(function) => {
-                let Function { params, ret_type, .. } = &**function;
-                ValueType::Function(FunctionType {ret_type: ret_type.clone(), params: params.clone()}.into())
+                let Function { params, ret_type, .. } = function.as_ref();
+                ValueType::Function(FunctionType {ret_type: ret_type.clone(), params: params.clone(), native: false}.into())
             }
             TypedValue::NativeFunc(function) => {
-                let NativeFunction { params, ret_type, .. } = &**function;
-                ValueType::Function(FunctionType {ret_type: ret_type.clone(), params: (*params).into()}.into())
+                let NativeFunction { params, ret_type, .. } = function.as_ref();
+                ValueType::Function(FunctionType {ret_type: ret_type.clone(), params: (*params).into(), native: true}.into())
             }
             TypedValue::List(list) => ValueType::List(Box::new(
                 if let Some(first) = list.borrow().first() {

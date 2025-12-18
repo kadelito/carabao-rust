@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::builtins::GLOBAL_FUNCS;
+use crate::registry::GLOBAL_FUNCS;
 use crate::expr_ast::*;
 use crate::lexing::{Token, TokenType};
 use crate::parsing::BINARY_OPERATORS;
@@ -65,6 +65,7 @@ pub enum UsageError {
     TooManyArgs,
     CantIndexThat,
     NotIterable,
+    InvalidRange,
 }
 
 struct FunctionResolver<'ast> {
@@ -216,12 +217,9 @@ impl<'ast> FunctionResolver<'ast> {
 
     fn exit_scope(&mut self) {
         self.depth -= 1;
-        while let Some(top) = self.local_bindings.last() {
-            if top.depth <= self.depth {
-                break;
-            } else {
-                self.local_bindings.pop();
-            }
+        while let Some(top) = self.local_bindings.last()
+            && top.depth > self.depth {
+            self.local_bindings.pop();
         }
     }
 
@@ -231,6 +229,7 @@ impl<'ast> FunctionResolver<'ast> {
 
     fn error_at_token(&mut self, token: &Token, reason: UsageError) {
         eprintln!("[unfinished] Error on line {}: {:?}", token.line(), reason);
+        self.globals.borrow_mut().errors.push(reason);
     }
     
     fn error_at_expr(&mut self, _expr: &Expr, reason: UsageError) {
@@ -276,7 +275,7 @@ impl<'ast> FunctionResolver<'ast> {
         if let Some(func) = self.function_backlog.remove(name) {
             self.finish_function(func);
         };
-        // Assume the function has already been resolved at a previous call
+        // Do nothing, assume the function has already been resolved at a previous call
     }
 
     fn finish_function(&mut self, func: TempFunction) {
@@ -371,21 +370,33 @@ impl<'ast> StmtVisitor<'ast, ()> for FunctionResolver<'ast> {
         self.loop_depth -= 1;
     }
 
-    fn visit_for_stmt(&mut self, var: &Token, sequence: &Box<Expr>, body: &'ast Box<Stmt>) {
+    fn visit_for_stmt(&mut self, loop_var: &Token, sequence: &Box<Expr>, body: &'ast Box<Stmt>) {
 
-        self.line = var.line();
+        self.line = loop_var.line();
 
         self.enter_scope();
-        let var_type = match self.resolve_expr(sequence) {
-            ValueType::String => ValueType::Char,
-            ValueType::Object(object_type) => todo!(),
-            ValueType::List(value_type) => *value_type,
+        let local_var_type = match self.resolve_expr(sequence) {
+            ValueType::String => {
+                self.declare_local(String::new(), ValueType::Int);
+                ValueType::Char
+            }
+            ValueType::List(value_type) => {
+                self.declare_local(String::new(), ValueType::Int);
+                *value_type
+            },
+            ValueType::Range(t) => match *t {
+                ValueType::Int => ValueType::Int, // the variable itself
+                _ => {
+                    self.error_at_expr(sequence, UsageError::NotIterable);
+                    ValueType::Any
+                }
+            }
             _ => {
                 self.error_at_expr(sequence, UsageError::NotIterable);
                 ValueType::Any
             }
         };
-        self.declare_local(var.copy_ident(), var_type);
+        self.declare_local(loop_var.copy_ident(), local_var_type);
 
         self.loop_depth += 1;
         self.resolve_stmt(body);
@@ -505,9 +516,24 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
             .final_data
             .bin_types
             .insert(id, both.clone());
-        if [TokenType::DoubleEqual, TokenType::BangEqual].contains(&op.kind()) {
+        if [
+            TokenType::DoubleEqual,
+            TokenType::BangEqual,
+            ].contains(&op.kind()) {
             // supported for all types probably
             return ValueType::Bool;
+        } else if op.kind() == TokenType::DoubleDot {
+            // ranges get unique logic
+            return match &both {
+                ValueType::Int
+                | ValueType::Float
+                | ValueType::Char
+                | ValueType::String => ValueType::Range(Box::new(both)),
+                _ => {
+                    self.error_at_token(op, UsageError::InvalidRange);
+                    ValueType::Any
+                }
+            }
         }
         // after this point, both are the same type
         match both {
@@ -527,7 +553,6 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
                 | TokenType::Greater
                 | TokenType::GreaterEqual
                 | TokenType::LessEqual => ValueType::Bool,
-                TokenType::DoubleDot => /*TODO*/todo!(), // TODO ranges
                 _ => {
                     self.error_at_token(op, UsageError::InvalidOperator);
                     ValueType::Int
@@ -543,7 +568,6 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
                 | TokenType::Greater
                 | TokenType::GreaterEqual
                 | TokenType::LessEqual => ValueType::Bool,
-                TokenType::DoubleDot => /*TODO*/todo!(), // TODO ranges
                 _ => {
                     self.error_at_token(op, UsageError::InvalidOperator);
                     ValueType::Float
@@ -569,7 +593,6 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
                 | TokenType::DoubleGreater
                 | TokenType::GreaterEqual
                 | TokenType::LessEqual => ValueType::Bool,
-                TokenType::DoubleDot => /*TODO*/todo!("String ranges?"),
                 _ => {
                     self.error_at_token(op, UsageError::InvalidOperator);
                     ValueType::String
@@ -593,8 +616,10 @@ impl<'ast> ExprVisitor<'_, ValueType> for FunctionResolver<'ast> {
                     ValueType::String
                 }
             },
-            ValueType::Function { .. } => panic!("can't coerce to function??"),
             ValueType::Object { .. } => /*TODO*/todo!("Operator overloading?"),
+            ValueType::Range(value_type) => todo!("adding numeric ranges?"),
+            ValueType::Function { .. } => unreachable!(),
+            ValueType::OverloadSet(function_types) => unreachable!(),
         }
     }
 

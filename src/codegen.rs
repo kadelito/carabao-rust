@@ -7,13 +7,14 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 
 use crate::{
     analysis::{AnalysisResult, Binding},
-    builtins::STR_FUNC_INDEX,
-    debug::opcodes::disassemble,
+    registry::BUILTIN_FUNC_INDICES,
     expr_ast::{Expr, ExprVisitor},
     lexing::{Token, TokenType},
     stmt_ast::{Stmt, StmtVisitor},
     types::*, values::*
 };
+#[cfg(feature = "debug")]
+use crate::debug::opcodes::disassemble;
 
 #[derive(Debug, TryFromPrimitive, IntoPrimitive)]
 #[repr(u8)]
@@ -25,6 +26,7 @@ pub enum OpCode {
     Pop,
     Return,
     Constant, // [const pool index]
+    LoadByte,
     GetLocal, // [stack index]
     SetLocal, // [stack index]
     GetGlobal, // [globals index]
@@ -33,14 +35,14 @@ pub enum OpCode {
     Jump, // [ip offset][byte 2 of short]
     JumpIfNot, // [ip offset][byte 2]
     Call, // # of arguments to parse
-    SwapTop, // [stack index from end, 0 == len-1]
-    List, // # length of list literal
+    List, // TODO replace with function call
     IndexGet,
     IndexSet,
-    Slice, // TODO is this necessary?
+    Slice, // TODO replace with function call
     StrIndex,
-    StrSlice,
-
+    StrSlice, // TODO replace with function call
+    StrConcat,
+    
     // ========== Casts ==========
     IntToFloat,
     IntToBool,
@@ -62,9 +64,7 @@ pub enum OpCode {
     // ========== Arithmetic operators ==========
 
     ValEqual,
-    StrConcat,
 
-    // Floats
     FloatAdd,
     FloatSub,
     FloatMul,
@@ -74,7 +74,6 @@ pub enum OpCode {
     FloatLess,
     FloatGreater,
 
-    // Ints
     IntAdd,
     IntSub,
     IntMul,
@@ -90,7 +89,6 @@ pub enum OpCode {
     IntLess,
     IntGreater,
 
-    // Bools
     BoolNot,
 
     Crash,
@@ -120,6 +118,7 @@ pub fn generate(ast: &Vec<Stmt>, context: AnalysisResult) -> Function {
     for stmt in ast {
         generator.code_stmt(stmt);
     }
+    generator.context.prev_line = 0;
     generator.write_instr(OpCode::None);
     generator.write_instr(OpCode::Return);
     Function::from(generator.context.function)
@@ -253,6 +252,13 @@ impl Generator {
             TypedValue::Bool(b) => self.write_instr(if b { OpCode::True } else { OpCode::False }),
             TypedValue::None => self.write_instr(OpCode::None),
             _ => {
+                if let TypedValue::Int(i) = value
+                    && i8::MIN as i64 <= i && i <= i8::MAX as i64 {
+                    self.write_instr(OpCode::LoadByte);
+                    self.write_byte(i as u8);
+                    return;
+                }
+
                 self.write_instr(OpCode::Constant);
                 let index = self.context.function.constants.len();
                 if index > u8::MAX.into() {
@@ -340,8 +346,10 @@ impl Generator {
     }
 
     /// Tells `continue`s where to jump
-    fn begin_loop(&mut self, loop_start: usize) {
-        self.context.loop_starts.push(loop_start);
+    fn begin_loop(&mut self) -> usize {
+        let start = self.context.function.code.len();
+        self.context.loop_starts.push(start);
+        start
     }
 
     /// Uses the current length as the loop end index,
@@ -378,7 +386,8 @@ impl Generator {
         } else if *expected == ValueType::String {
             // No string cast, so we call __str instead
             self.write_instr(OpCode::GetGlobal);
-            self.write_byte(STR_FUNC_INDEX);
+            let to_str_index = &BUILTIN_FUNC_INDICES["to_str"];
+            self.write_byte(*to_str_index as u8);
             self.code_expr_as_is(expr);
             self.write_instr(OpCode::Call);
             self.write_byte(1);
@@ -513,8 +522,7 @@ impl StmtVisitor<'_, ()> for Generator {
     }
 
     fn visit_while_stmt(&mut self, condition: &Box<Expr>, body: &Box<Stmt>) -> () {
-        let start = self.context.function.code.len();
-        self.begin_loop(start);
+        let start = self.begin_loop();
         self.code_expr_with_cast(&ValueType::Bool, condition);
         let end = self.write_jump(OpCode::JumpIfNot);
         self.code_stmt(body);
@@ -530,18 +538,49 @@ impl StmtVisitor<'_, ()> for Generator {
         body: &Box<Stmt>,
     ) -> () {
         self.update_loc(var);
+        // TODO replace this with arbitrary integer ranges
+        // also strings & lists
+        
+        /*TEMP*/    let Expr::Binary { left, op, right, .. } = sequence.as_ref() else {
+        /*TEMP*/        panic!("Other for-loops not supported")
+        /*TEMP*/    };
+        /*TEMP*/    assert_eq!(op.kind(), TokenType::DoubleDot);
+        /*TEMP*/    assert_eq!(self.get_expr_type(left), &ValueType::Int);
+        /*TEMP*/    assert_eq!(self.get_expr_type(right), &ValueType::Int);
 
-        let start = self.context.function.code.len();
-        self.begin_loop(start);
-        // TODO primitive sequence optimization?
-        // IDEA IDEA
-        // for i*2 in 0..10:
-        //     <<i // 0, 2, 4, ... 20? ok wait
-        // an internal counter still increments (slot of sequence + 1?)
-        // but `i` evaluates to the expression
-        // maybe multiplication optimizes to += factor?
-        todo!();
-        // self.end_loop();
+        // initialization
+        // index is 0 if in global scope bc variables go to global slots, not stack
+        let var_index = if self.in_global_scope() { 0 } else {
+            *self.context.var_counts.last().unwrap()
+        };
+        self.code_expr_as_is(left); // this is the variable
+        let first_loop_jump = self.write_jump(OpCode::Jump);
+
+        // increment (i = i + 1)
+        let loop_start = self.begin_loop();
+        self.write_instr(OpCode::GetLocal);
+        self.write_byte(var_index); // i
+        self.constant(TypedValue::Int(1)); // 1
+        self.write_instr(OpCode::IntAdd); // i + 1
+
+        self.write_instr(OpCode::SetLocal);
+        self.write_byte(var_index); // i = i + 1
+        self.write_instr(OpCode::Pop);
+
+        // condition
+        self.patch_jump_to_next(first_loop_jump);
+        self.write_instr(OpCode::GetLocal);
+        self.write_byte(var_index); // i
+        self.code_expr_as_is(right); // RB
+        self.write_instr(OpCode::IntLess); // i < RB
+        let end_jump = self.write_jump(OpCode::JumpIfNot);
+        
+        self.code_stmt(body);
+
+        self.write_jump_back(loop_start);
+        self.patch_jump_to_next(end_jump);
+        self.end_loop();
+        self.write_instr(OpCode::Pop); // i
     }
 
     fn visit_keyword_stmt(&mut self, keyword: &Token, arg: &Option<Box<Expr>>) -> () {
@@ -565,8 +604,10 @@ impl StmtVisitor<'_, ()> for Generator {
                             // The "loop depth" at this point is 3.
                             // This break statement would jump to the end of loop (3 - 2 = 1).
                             break 2
-                            break 1 // to loop 3 - 1 = 2 end
-                            break 3 // to loop 3 - 3 = 0 end
+                            break 1 // to loop {3 - 1 = 2} end
+                            break   // 1 by default, loop 2 end
+                            break 3 // to loop {3 - 3 = 0} end
+                            break 4 // invalid
                         }
                         // loop 2 end
                     }
@@ -616,10 +657,13 @@ impl ExprVisitor<'_, ()> for Generator {
     fn visit_binary_expr(&mut self, left: &Box<Expr>, op: &Token, right: &Box<Expr>, id: usize) -> () {
         self.update_loc(op);
 
+        let before_operands = self.context.function.code.len();
+
         let both = self.bin_types.remove(&id).expect("Should have resolved types in binary");
         self.code_expr_with_cast(&both, left);
         self.code_expr_with_cast(&both, right);
         
+        // Special type-agnostic cases
         match op.kind() {
             TokenType::DoubleEqual => {
                 self.write_instr(OpCode::ValEqual);
@@ -628,6 +672,16 @@ impl ExprVisitor<'_, ()> for Generator {
             TokenType::BangEqual => {
                 self.write_instr(OpCode::ValEqual);
                 self.write_instr(OpCode::BoolNot);
+                return;
+            }
+            TokenType::DoubleDot => {
+                let operands = self.context.function.code.split_off(before_operands);
+                self.write_instr(todo!(/*TODO*/"LoadNative"));
+                for byte in operands {
+                    self.write_byte(byte);
+                }
+                self.write_instr(todo!(/*TODO*/"CallNative"));
+                self.write_byte(2);
                 return;
             }
             _ => {}
@@ -817,7 +871,6 @@ impl ExprVisitor<'_, ()> for Generator {
         repr: &Token, val: &TypedValue, _id: usize) -> () {
         self.update_loc(repr);
 
-        // TODO loadByte for [-128, 127]
         self.constant(val.clone());
     }
     

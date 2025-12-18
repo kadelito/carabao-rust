@@ -4,7 +4,7 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use crate::analysis::analyze;
-use crate::builtins::GLOBAL_FUNCS;
+use crate::registry::GLOBAL_FUNCS;
 use crate::codegen::*;
 use crate::parsing::Parser;
 use crate::ProgramError;
@@ -14,6 +14,8 @@ use crate::values::*;
 const VM_STACK_CAPACITY: usize = 16384;
 const VM_CALLS_CAPACITY: usize = 256;
 
+// Useful macros
+// TODO make these fit with unions also
 macro_rules! vm_pop_val {
     ($vm: expr, $variant: ident) => {
         // TODO replace with extracting a specific type
@@ -28,8 +30,7 @@ macro_rules! vm_stack_pop {
         $vm.stack.pop().expect("Stack should not be empty.")
     };
 }
-
-macro_rules!  vm_unwrap_any {
+macro_rules! vm_unwrap_any {
     ($vm: expr, $variant: ident) => {{
         if let TypedValue::$variant(v) = *vm_pop_val!($vm, Any) {
             $vm.stack.push(TypedValue::$variant(v));
@@ -38,7 +39,6 @@ macro_rules!  vm_unwrap_any {
         }
     }};
 }
-
 macro_rules! vm_binary_op {
     ($vm: expr, $variant: ident, $op: tt, $to: ident) => {{
         let rhs = vm_pop_val!($vm, $variant);
@@ -209,6 +209,10 @@ impl VM {
             OpCode::None => self.stack.push(TypedValue::None),
             OpCode::True => self.stack.push(TypedValue::Bool(true)),
             OpCode::False => self.stack.push(TypedValue::Bool(false)),
+            OpCode::LoadByte => {
+                let int = self.read_byte().cast_signed() as i64;
+                self.stack.push(TypedValue::Int(int));
+            }
             OpCode::Jump => {
                 let offset =  self.read_short() as i16;
                 self.top_frame().ip = self.top_frame().ip.strict_add_signed(offset as isize);
@@ -219,11 +223,6 @@ impl VM {
                 if !b {
                     self.top_frame().ip = self.top_frame().ip.strict_add_signed(offset as isize);
                 }
-            }
-            OpCode::SwapTop => {
-                let end = self.stack.len() - 1;
-                let index = end - self.read_byte() as usize;
-                self.stack.swap(index, end);
             }
             OpCode::Call => {
                 // stack top atp: [func,arg1...argN]
@@ -304,26 +303,35 @@ impl VM {
                 self.stack.push(TypedValue::from(list))
             }
             OpCode::IndexGet => {
-                let index = pop_val!(Int);
+                let index = pop_val!(Int) as usize;
                 let list = pop_val!(List);
-                let at_index = list.borrow()[index as usize].clone();
+                let at_index = list.borrow()[index].clone();
                 self.stack.push(at_index);
             }
             OpCode::IndexSet => {
                 // as usual, no popping the actual value bc set is an expression
-                let index = pop_val!(Int);
+                let index = pop_val!(Int) as usize;
                 let list = pop_val!(List);
                 let new_value = self.stack_peek(0); // cloned here
-                list.borrow_mut()[index as usize] = new_value;
+                list.borrow_mut()[index] = new_value;
             }
             OpCode::Slice => todo!(),
-            OpCode::StrIndex => todo!(),
+            OpCode::StrIndex => {
+                let index = pop_val!(Int) as usize;
+                let string = pop_val!(String);
+                self.stack.push(
+                    TypedValue::Char(
+                        char::from_u32(string[index] as u32)
+                        .expect("u16s should be valid chars")
+                    )
+                );
+            },
             OpCode::StrSlice => todo!(),
             OpCode::AnyToInt => unwrap_any!(Int),
-            OpCode::AnyToFloat => todo!(),
-            OpCode::AnyToBool => todo!(),
-            OpCode::AnyToChar => todo!(),
-            OpCode::AnyToString => todo!(),
+            OpCode::AnyToFloat => unwrap_any!(Float),
+            OpCode::AnyToBool => unwrap_any!(Bool),
+            OpCode::AnyToChar => unwrap_any!(Char),
+            OpCode::AnyToString => unwrap_any!(String),
             OpCode::IntToFloat => {
                 let f = pop_val!(Int) as f64;
                 self.stack.push(TypedValue::Float(f));
@@ -344,7 +352,8 @@ impl VM {
             OpCode::StrConcat => {
                 let s2 = pop_val!(String);
                 let s1 = pop_val!(String);
-                self.stack.push(TypedValue::from((*s1).clone() + s2.as_ref()));
+                self.stack.push(TypedValue::String([s1, s2].concat()
+                    .into_boxed_slice().into()));
             },
             OpCode::FloatAdd => binary_op!(Float +: Float),
             OpCode::FloatSub => binary_op!(Float -: Float),

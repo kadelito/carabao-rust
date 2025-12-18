@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::IndexMut};
 
 use crate::{
     debug::expr_to_str,
@@ -302,7 +302,7 @@ impl<'a> Parser<'a> {
         let mut expr = self.ternary();
         if self.try_consume_any(&[TokenType::Equal]) {
             let assignee = Box::new(expr);
-            let value = Box::new(self.assign());
+            let value = Box::new(self.expression(false));
             expr = Expr::Assign {
                 assignee,
                 value,
@@ -381,7 +381,7 @@ impl<'a> Parser<'a> {
 
     fn comparison(&mut self) -> Expr {
         self.left_assoc_bin_series(
-            Parser::bitwise_or,
+            Parser::range,
             &[
                 TokenType::Less,
                 TokenType::LessEqual,
@@ -557,26 +557,8 @@ impl<'a> Parser<'a> {
                 val: TypedValue::None,
                 id,
             };
-        } else if self.try_consume(TokenType::IntLiteral) {
-            let mut literal = self.take_prev();
-            let value: Result<i64, ParseError> = literal
-                .take_lexeme()
-                .unwrap()
-                .parse()
-                .map_err(|_e| ParseError::ParseIntError);
-            match value {
-                Ok(i) => {
-                    return Expr::Literal {
-                        repr: literal,
-                        val: TypedValue::Int(i),
-                        id,
-                    };
-                }
-                Err(e) => {
-                    self.error_at(&literal, e);
-                    return Expr::dummy();
-                }
-            }
+        } else if self.try_consume_any(&[TokenType::DecIntLiteral, TokenType::HexIntLiteral, TokenType::BinIntLiteral]) {
+            return self.parse_integer(id);
         } else if self.try_consume(TokenType::FloatLiteral) {
             let mut literal = self.take_prev();
             let value: Result<f64, ParseError> = literal
@@ -702,6 +684,40 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_integer(&mut self, id: usize) -> Expr {
+        let mut literal = self.take_prev();
+        let mut str = literal
+                .take_lexeme()
+                .unwrap()
+                .into_boxed_str();
+        let base = match literal.kind() {
+            TokenType::DecIntLiteral => 10,
+            TokenType::HexIntLiteral => 16,
+            TokenType::BinIntLiteral => 12,
+            _ => unreachable!()
+        };
+        if base != 10 {
+            // truncate the 0x or 0b
+            if str.len() == 2 {
+                // just "0x" or "0b", becomes 0
+                str = str.index_mut(1..).into();
+            } else {
+                str = str.index_mut(2..).into();
+            }
+        }
+        let value = i64::from_str_radix(&str, base)
+            .map_err(|_| ParseError::ParseIntError);
+        match value {
+            Ok(i) => {
+                Expr::Literal {repr: literal, val: TypedValue::Int(i), id,}
+            }
+            Err(e) => {
+                self.error_at(&literal, e);
+                Expr::dummy()
+            }
+        }
+    }
+
     fn new_id(&mut self) -> usize {
         self.next_id += 1;
         self.next_id
@@ -742,7 +758,7 @@ impl<'a> Parser<'a> {
             };
 
             let params = params.into_boxed_slice();
-            ValueType::Function(FunctionType { ret_type, params }.into())
+            ValueType::Function(FunctionType { ret_type, params, native: false }.into())
         } else {
             return None
         })
@@ -940,15 +956,15 @@ mod parsing_tests {
         //...^
         assert_eq!(tester.cur, make_token("1", 1));
         assert_eq!(tester.prev, Some(Token::dummy()));
-        assert!(tester.check(TokenType::IntLiteral));
-        assert!(tester.try_consume(TokenType::IntLiteral)); // advances to 2
+        assert!(tester.check(TokenType::DecIntLiteral));
+        assert!(tester.try_consume(TokenType::DecIntLiteral)); // advances to 2
         //  [1][2][3]
         //  (1) ^
         assert_eq!(tester.cur, make_token("2", 1));
         assert_eq!(tester.prev, Some(make_token("1", 1)));
         assert_eq!(tester.take_prev(), make_token("1", 1));
         assert_eq!(tester.prev, None);
-        tester.expect_because(TokenType::IntLiteral, ParseError::NoExpression); // advances to 3
+        tester.expect_because(TokenType::DecIntLiteral, ParseError::NoExpression); // advances to 3
         assert_eq!(tester.prev, Some(make_token("2", 1)));
         tester.advance(); // advances past 3
         //  [1] [2] [3] EOF EOF EOF...

@@ -1,4 +1,4 @@
-use std::{cell::RefCell, fmt::{Display, write}, rc::Rc};
+use std::{cell::RefCell, fmt::{Display, format, write}, rc::Rc};
 
 use crate::{codegen::{LineRLE, OpCode}, lexing::{Token, TokenType}, values::{Function, TypedValue}};
 
@@ -11,8 +11,10 @@ pub enum ValueType {
     Char,
     Bool,
     String,
-    /// this is just generics all over again
+    // my god they're generic
+    Range(Box<ValueType>),
     Function(Box<FunctionType>),
+    OverloadSet(Vec<FunctionType>),
     Object(Box<ObjectType>),
     List(Box<ValueType>),
 }
@@ -20,12 +22,13 @@ pub enum ValueType {
 #[derive(Debug, PartialEq, Clone)]
 pub struct FunctionType {
     pub ret_type: ValueType,
-    pub params: Box<[ValueType]>
+    pub params: Box<[ValueType]>,
+    pub native: bool,
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct ObjectType {
-    
+
 }
 
 impl Display for ValueType {
@@ -38,7 +41,8 @@ impl Display for ValueType {
             ValueType::Char => write!(f, "char"),
             ValueType::Bool => write!(f, "bool"),
             ValueType::String => write!(f, "string"),
-            ValueType::Function( func )=>
+            ValueType::Range(t) => write!(f, "{0}..", t),
+            ValueType::Function(func) =>
                 write!(f, "func({1}): {0}",
                     func.ret_type,
                     func.params.iter()
@@ -46,12 +50,16 @@ impl Display for ValueType {
                         .collect::<Vec<String>>()
                         .join(", ")),
             ValueType::List(t) => write!(f, "{}[]", t.to_string()),
-            ValueType::Object(object_type) => todo!(),
+            ValueType::Object(_) => todo!(),
+            ValueType::OverloadSet(functions) => f.write_str(
+                &functions.iter()
+                    .map(|func| format!("{}", ValueType::Function(Box::new(func.clone()))))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ),
         }
     }
 }
-
-const TYPE_BYTE_OFFSET: u8 = 0x80;
 
 impl ValueType {
     pub fn dummy(&self) -> TypedValue {
@@ -62,7 +70,10 @@ impl ValueType {
             ValueType::Float => TypedValue::Float(0.0),
             ValueType::Char => TypedValue::Char('\0'),
             ValueType::Bool => TypedValue::Bool(false),
-            ValueType::String => TypedValue::String(Rc::new(String::new())),
+            ValueType::String => TypedValue::String(Rc::new([])),
+            ValueType::Range(t) => TypedValue::Range(Rc::new(
+                (t.dummy(), t.dummy())
+            )),
             ValueType::Function(func) => {
                 let func = Function {
                     name: String::new(),
@@ -80,8 +91,9 @@ impl ValueType {
             },
             ValueType::List(_)
             => TypedValue::List(Rc::new(RefCell::new(Vec::new()))),
-            ValueType::Object(object_type) => todo!(),
+            ValueType::Object(_) => todo!(),
             ValueType::None => TypedValue::None,
+            ValueType::OverloadSet(function_types) => unreachable!(),
         }
     }
 
@@ -143,7 +155,8 @@ impl ValueType {
             params: params.iter()
                 .map(|(_, tp)| tp.clone())
                 .collect::<Vec<ValueType>>()
-                .into_boxed_slice()
+                .into_boxed_slice(),
+            native: false
         }.into())
 }
 }
