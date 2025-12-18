@@ -111,7 +111,9 @@ impl<'a> Lexer<'a> {
 
     fn make_token(&self, kind: TokenType) -> Token {
         match kind {
-            TokenType::IntLiteral
+            TokenType::DecIntLiteral
+            | TokenType::HexIntLiteral
+            | TokenType::BinIntLiteral
             | TokenType::FloatLiteral
             | TokenType::CharLiteral
             | TokenType::StringLiteral
@@ -343,9 +345,20 @@ impl<'a> Lexer<'a> {
         token
     }
     
-    // TODO non-decimal numbers (0xff, 0b1011, etc)
-    fn number(&mut self) -> Token {
-        while self.peek().is_ascii_digit() {
+    fn number(&mut self, starts_with_0: bool) -> Token {
+
+        // 0 already consumed
+        let base = if !starts_with_0 {
+            10
+        } else if self.try_consume('x') {
+            16   
+        } else if self.try_consume('b') {
+            2
+        } else {
+            10
+        };
+
+        while self.peek().is_digit(base) {
             self.advance();
         }
         let is_float = self.peek() == '.' && self.peek_ahead(1).is_ascii_digit();
@@ -357,7 +370,12 @@ impl<'a> Lexer<'a> {
             }
             kind = TokenType::FloatLiteral;
         } else {
-            kind = TokenType::IntLiteral;
+            kind = match base {
+                10 => TokenType::DecIntLiteral,
+                16 => TokenType::HexIntLiteral,
+                2  => TokenType::BinIntLiteral,
+                _ => unreachable!()
+            };
         }
         self.make_token(kind)
     }
@@ -425,7 +443,7 @@ impl<'a> Lexer<'a> {
         }
 
         if c.is_ascii_digit() {
-            return self.number();
+            return self.number(c == '0');
         }
 
         match c {
@@ -639,7 +657,9 @@ impl Token {
             T::Float => "float",
             T::Char => "char",
             T::String => "string",
-            T::IntLiteral => "[Int]",
+            T::DecIntLiteral => "[Int-10]",
+            T::HexIntLiteral => "[Int-16]",
+            T::BinIntLiteral => "[Int-2]",
             T::FloatLiteral => "[Float]",
             T::CharLiteral => "[Char]",
             T::StringLiteral => "[String]",
@@ -698,7 +718,9 @@ pub enum TokenType {
     DoubleDot,
 
     // Literals
-    IntLiteral,
+    DecIntLiteral,
+    HexIntLiteral,
+    BinIntLiteral,
     FloatLiteral,
     CharLiteral,
     StringLiteral,

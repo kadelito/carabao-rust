@@ -7,7 +7,7 @@ use crate::stmt_ast::*;
 use crate::types::*;
 
 pub mod opcodes {
-    use crate::{builtins::GLOBAL_FUNCS, codegen::OpCode, types::ValueType, values::{Function, TypedValue}};
+    use crate::{registry::GLOBAL_FUNCS, codegen::OpCode, types::ValueType, values::{Function, TypedValue}};
 
     pub fn disassemble(func: &Function) {
         
@@ -100,9 +100,9 @@ pub mod opcodes {
                 }
                 OpCode::GetLocal
                 | OpCode::SetLocal
-                | OpCode::SwapTop
                 | OpCode::Call 
-                | OpCode::List => {
+                | OpCode::List
+                | OpCode::LoadByte => {
                     let b= reader.byte();
                     println!("{b:02}");
                 }
