@@ -6,55 +6,60 @@ use crate::{
     values::{NativeFunction}
 };
 
+pub mod macros {
+
+    macro_rules! val_into {
+        ($val: expr => $variant: ident) => {{
+            let TypedValue::$variant(val) = $val else { crate::errors::macros::internal_error!("Value was not {}", stringify!($variant)) };
+            val
+        }};
+    }
+
+    pub(crate) use val_into;
+}
+
+macro_rules! native_func {
+    // with accessible identifier
+    ($ident_str: expr, $func_ptr: path as func($($params: ident),*) : $ret_type: ident) => {
+        ($ident_str, NativeFunction {
+            name: $ident_str,
+            params: &[$(ValueType::$params),*],
+            ret_type: ValueType::$ret_type,
+            func: $func_ptr,
+        })
+    };
+
+    // no accessible identifier or type info, name is for internal use only
+    ($ident_str: expr, $func_ptr: path) => {
+        ("", NativeFunction {
+            name: $ident_str,
+            params: &[],
+            ret_type: ValueType::None,
+            func: $func_ptr,
+        })
+    };
+}
+
 /// An array of functions and their identifiers, accessible in Carabao code.
 /// 
 /// Blank identifiers correspond to functions that can only be called implicitly.
-pub const GLOBAL_FUNCS: [(&'static str, NativeFunction); 7] = [
-    ("", NativeFunction {
-        name: "to_str",
-        params: &[ValueType::Any],
-        ret_type: ValueType::String,
-        func: strings::to_string,
-    }),
-    ("print", NativeFunction {
-        name: "print",
-        params: &[ValueType::Any],
-        ret_type: ValueType::None,
-        func: builtins::print,
-    }),
-    ("println", NativeFunction {
-        name: "println",
-        params: &[ValueType::Any],
-        ret_type: ValueType::None,
-        func: builtins::println,
-    }),
-    ("clock", NativeFunction {
-        name: "clock",
-        params: &[],
-        ret_type: ValueType::Int,
-        func: builtins::clock,
-    }),
-    ("__debug_val", NativeFunction {
-        name: "debug_val",
-        params: &[ValueType::Any],
-        ret_type: ValueType::String,
-        func: strings::debug_str,
-    }),
-    // TODO remove accesible identifiers once
-    ("__list_len", NativeFunction {
-        name: "list_len",
-        // i dont wanna deal with some kind of generic list type
-        // actual checking can be done during semantic analysis
-        params: &[ValueType::Any],
-        ret_type: ValueType::Int,
-        func: iterables::list_len,
-    }),
-    ("__str_len", NativeFunction {
-        name: "str_len",
-        params: &[ValueType::String],
-        ret_type: ValueType::Int,
-        func: strings::str_len,
-    }),
+pub const GLOBAL_FUNCS: [(&'static str, NativeFunction); 11] = [
+    // native functions available to the user
+    // the string arg refers to the identfier & internal name
+    native_func!("print",   builtins::print    as func(Any): None),
+    native_func!("println", builtins::println  as func(Any): None),
+    native_func!("clock",   builtins::clock    as func(   ): Int),
+    native_func!("str",     strings::to_string as func(Any): String), // str(val) or val.str()
+
+    // internal, type-unchecked functions
+    // the string is the internal name, not identifier
+    native_func!("str_len", strings::str_len),
+    native_func!("str_concat", strings::str_concat),
+    native_func!("list_len", iterables::lists::list_len),
+    native_func!("new_list", iterables::lists::new_list),
+    native_func!("new_range", iterables::ranges::new_range),
+    native_func!("range_start", iterables::ranges::range_get_start),
+    native_func!("range_end", iterables::ranges::range_get_end),
 ];
 
 /// Maps static string slices to indices to the global funcs list.

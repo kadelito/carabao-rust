@@ -38,7 +38,7 @@ pub union RuntimeValue {
 
 #[derive(PartialEq)]
 pub struct Function {
-    pub name: String,
+    pub name: Box<str>,
     pub params: Box<[ValueType]>,
     pub ret_type: ValueType,
     pub constants: Box<[TypedValue]>,
@@ -114,7 +114,7 @@ impl Display for TypedValue {
             TypedValue::None => f.write_str("none"),
             TypedValue::Any(value) => Display::fmt(&value, f),
             TypedValue::Int(i) => f.write_str(&i.to_string()),
-            TypedValue::Float(flt) => write!(f, "{:3.}", flt), // TODO better float formatting than this
+            TypedValue::Float(flt) => write!(f, "{:.}", flt), // TODO better float formatting than this
             TypedValue::Char(c) => f.write_char(*c),
             TypedValue::Bool(b) => f.write_str(if *b { "true" } else { "false" }),
             TypedValue::String(s) => f.write_str(
@@ -199,10 +199,6 @@ impl TypedValue {
                 }
             )),
         }
-    }
-
-    pub fn is_type(&self, val_type: &ValueType) -> bool {
-        self.get_type() == *val_type
     }
 
 }

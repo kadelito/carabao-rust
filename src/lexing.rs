@@ -124,13 +124,17 @@ impl<'a> Lexer<'a> {
                     Ok(lexeme) => Token {
                         kind,
                         lexeme: Some(lexeme.to_owned()),
-                        line: self.line,
+                        loc: TokenLocation {
+                            line: self.line,
+                        },
                         error: None
                     },
                     Err(e) => Token {
                         kind: TokenType::Error,
                         lexeme: None,
-                        line: self.line,
+                        loc: TokenLocation {
+                            line: self.line,
+                        },
                         error: Some(e)
                     },
                 }
@@ -138,7 +142,9 @@ impl<'a> Lexer<'a> {
             _ => Token {
                 kind,
                 lexeme: None,
-                line: self.line,
+                loc: TokenLocation {
+                    line: self.line,
+                },
                 error: None
             },
         }
@@ -148,7 +154,9 @@ impl<'a> Lexer<'a> {
         Token {
             kind,
             lexeme: Some(lexeme),
-            line: self.line,
+            loc: TokenLocation {
+                line: self.line,
+            },
             error: None
         }
     }
@@ -355,6 +363,7 @@ impl<'a> Lexer<'a> {
         } else if self.try_consume('b') {
             2
         } else {
+            // just 0, next loop won't run
             10
         };
 
@@ -543,8 +552,13 @@ impl<'a> Lexer<'a> {
 pub struct Token {
     kind: TokenType,
     pub lexeme: Option<String>,
-    line: u32,
+    loc: TokenLocation,
     error: Option<TokenizationError>,
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub struct TokenLocation {
+    line: u32
 }
 
 impl Debug for Token {
@@ -563,7 +577,9 @@ impl Token {
         Token {
             kind: TokenType::Error,
             lexeme: None,
-            line: u32::MAX,
+            loc: TokenLocation {
+                line: u32::MAX,
+            },
             error: Some(TokenizationError::EmptyToken)
         }
     }
@@ -589,7 +605,11 @@ impl Token {
     }
 
     pub fn line(&self) -> u32 {
-        self.line
+        self.loc.line
+    }
+
+    pub fn location(&self) -> TokenLocation {
+        self.loc
     }
 
     pub fn error(&self) -> Option<TokenizationError> {
@@ -765,7 +785,7 @@ pub mod lexing_tests {
 
     pub fn make_token(src: &str, line: u32) -> Token {
         let mut token = Lexer::new(src).scan_token();
-        token.line = line;
+        token.loc.line = line;
         token
     }
 

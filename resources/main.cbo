@@ -1,0 +1,27 @@
+{
+    // new g1 = 1
+    // println(g1)
+
+    func overload(int x) {
+        println(x + ", the integer")
+    }
+
+    // overload(10) // 10, the integer
+    // new g2 = 2
+    // println(g2)
+
+    func overload(string str) {
+        println(str + ", the string")
+    }
+
+    // new g3 = 3
+    // println(g3)
+
+    // // overload("10") // 10, the string
+    // // overload(10) // 10, the integer (should call the first 'overload')
+
+    new x = 1
+    println(x)
+    new x = 2
+    println(x)
+}

@@ -1,9 +1,25 @@
-use std::{cell::RefCell, fmt::{Display, format, write}, rc::Rc};
+use std::{
+    cell::RefCell,
+    fmt::Display,
+    rc::Rc
+};
 
-use crate::{codegen::{LineRLE, OpCode}, lexing::{Token, TokenType}, values::{Function, TypedValue}};
+use crate::{
+    codegen::{
+        LineRLE,
+        OpCode
+    }, errors::macros::internal_error, lexing::{
+        Token,
+        TokenType
+    }, values::{
+        Function,
+        TypedValue
+    }
+};
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum ValueType {
+    Unchecked,
     None,
     Any,
     Int,
@@ -28,12 +44,14 @@ pub struct FunctionType {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct ObjectType {
-
+    // TODO
 }
 
 impl Display for ValueType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            ValueType::Unchecked => 
+                internal_error!("Unchecked types should not be displayed"),
             ValueType::None => write!(f, "none"),
             ValueType::Any => write!(f, "any"),
             ValueType::Int => write!(f, "int"),
@@ -51,12 +69,8 @@ impl Display for ValueType {
                         .join(", ")),
             ValueType::List(t) => write!(f, "{}[]", t.to_string()),
             ValueType::Object(_) => todo!(),
-            ValueType::OverloadSet(functions) => f.write_str(
-                &functions.iter()
-                    .map(|func| format!("{}", ValueType::Function(Box::new(func.clone()))))
-                    .collect::<Vec<String>>()
-                    .join(", ")
-            ),
+            ValueType::OverloadSet(functions) => 
+                panic!("OverloadSet should not be displayed"),
         }
     }
 }
@@ -65,6 +79,8 @@ impl ValueType {
     pub fn dummy(&self) -> TypedValue {
         // TODO document this
         match self {
+            ValueType::Unchecked => TypedValue::None,
+            ValueType::None => TypedValue::None,
             ValueType::Any => TypedValue::Any(Box::new(TypedValue::None)),
             ValueType::Int => TypedValue::Int(0),
             ValueType::Float => TypedValue::Float(0.0),
@@ -76,7 +92,7 @@ impl ValueType {
             )),
             ValueType::Function(func) => {
                 let func = Function {
-                    name: String::new(),
+                    name: String::new().into_boxed_str(),
                     params: func.params.clone(),
                     ret_type: func.ret_type.clone(),
                     constants: Box::new([func.ret_type.dummy()]),
@@ -92,7 +108,6 @@ impl ValueType {
             ValueType::List(_)
             => TypedValue::List(Rc::new(RefCell::new(Vec::new()))),
             ValueType::Object(_) => todo!(),
-            ValueType::None => TypedValue::None,
             ValueType::OverloadSet(function_types) => unreachable!(),
         }
     }
@@ -112,7 +127,9 @@ impl ValueType {
 
     /// Returns whether an explicit cast works from `given` to `expected`.
     pub fn can_convert_type(expected: &ValueType, given: &ValueType) -> bool {
-        if *expected == ValueType::Any
+        if *given == ValueType::Unchecked {
+            true
+        } else if *expected == ValueType::Any
             || *given == ValueType::Any 
             || *expected == *given {
             // if given is Any, we delegate type checking to runtime
@@ -131,19 +148,19 @@ impl ValueType {
             
     }
 
-    pub fn coerce_binary(type1: &ValueType, op: TokenType, type2: &ValueType) -> Option<(ValueType, ValueType)> {
+    pub fn coerce_binary(type1: &ValueType, op: TokenType, type2: &ValueType) -> Option<ValueType> {
         if type1 == type2 {
             // Already the same type
-            Some((type1.clone(), (type2.clone())))
+            Some(type1.clone())
         } else if op == TokenType::Plus && [type1, type2].contains(&&ValueType::String) {
             // val1 is a string
-            Some((ValueType::String, ValueType::String))
+            Some(ValueType::String)
         } else {
             match (type1, type2) {
-                (ValueType::Int, ValueType::Float) => Some((ValueType::Float, ValueType::Float)),
-                (ValueType::Int, ValueType::Char) => Some((ValueType::Int, ValueType::Int)),
-                (ValueType::Float, ValueType::Int) => Some((ValueType::Float, ValueType::Float)),
-                (ValueType::Char, ValueType::Int) => Some((ValueType::Int, ValueType::Int)),
+                (ValueType::Int, ValueType::Float) => Some(ValueType::Float),
+                (ValueType::Int, ValueType::Char) => Some(ValueType::Int),
+                (ValueType::Float, ValueType::Int) => Some(ValueType::Float),
+                (ValueType::Char, ValueType::Int) => Some(ValueType::Int),
                 _ => None
             }
         }
@@ -158,5 +175,5 @@ impl ValueType {
                 .into_boxed_slice(),
             native: false
         }.into())
-}
+    }
 }

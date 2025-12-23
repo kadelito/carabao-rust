@@ -63,7 +63,6 @@ pub mod opcodes {
                 | OpCode::AnyToString
 
                 | OpCode::ValEqual
-                | OpCode::StrConcat
                 | OpCode::FloatAdd
                 | OpCode::FloatSub
                 | OpCode::FloatMul
@@ -101,7 +100,6 @@ pub mod opcodes {
                 OpCode::GetLocal
                 | OpCode::SetLocal
                 | OpCode::Call 
-                | OpCode::List
                 | OpCode::LoadByte => {
                     let b= reader.byte();
                     println!("{b:02}");
@@ -256,7 +254,7 @@ impl ExprVisitor<'_, String> for AstPrinter {
     fn visit_literal_expr(&mut self, _repr: &Token, val: &TypedValue, _id: usize) -> String {
         if self.as_tree {
             format!("{}{:?}", ":   ".repeat(self.depth as usize), val)
-        } else if val.is_type(&ValueType::String) {
+        } else if val.get_type() == ValueType::String {
             format!("\"{}\"", val.to_string())
         } else {
             format!("{}", val.to_string())
@@ -368,7 +366,7 @@ fn coerce_types(val1: TypedValue, val2: TypedValue) -> Result<(TypedValue, Typed
     // int & float -> both float
     // int & char -> both int
 
-    if val1.is_type(&val2.get_type()) {
+    if val1.get_type() == val2.get_type() {
         // Already the same type
         Ok((val1, val2))
     } else if let V::String(_) = val1 {

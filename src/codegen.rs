@@ -6,12 +6,7 @@ use std::{
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 
 use crate::{
-    analysis::{AnalysisResult, Binding},
-    registry::BUILTIN_FUNC_INDICES,
-    expr_ast::{Expr, ExprVisitor},
-    lexing::{Token, TokenType},
-    stmt_ast::{Stmt, StmtVisitor},
-    types::*, values::*
+    analysis::{AnalysisResult, Binding}, errors::macros::internal_error, expr_ast::{Expr, ExprVisitor}, lexing::{Token, TokenType}, registry::BUILTIN_FUNC_INDICES, stmt_ast::{Stmt, StmtVisitor}, types::*, values::*
 };
 #[cfg(feature = "debug")]
 use crate::debug::opcodes::disassemble;
@@ -35,13 +30,11 @@ pub enum OpCode {
     Jump, // [ip offset][byte 2 of short]
     JumpIfNot, // [ip offset][byte 2]
     Call, // # of arguments to parse
-    List, // TODO replace with function call
     IndexGet,
     IndexSet,
     Slice, // TODO replace with function call
     StrIndex,
     StrSlice, // TODO replace with function call
-    StrConcat,
     
     // ========== Casts ==========
     IntToFloat,
@@ -198,7 +191,7 @@ impl From<TempFunction> for Function {
             lines,
         } = value;
         let new = Self {
-            name, params, ret_type,
+            name: name.into_boxed_str(), params, ret_type,
             constants: constants.into_boxed_slice(),
             code: code.into_boxed_slice(),
             lines: lines.into_boxed_slice(),
@@ -273,6 +266,21 @@ impl Generator {
 
     fn write_instr(&mut self, instr: OpCode) {
         self.write_byte(instr.into());
+    }
+
+    fn write_native(&mut self, func_name: &str) {
+        // TODO replace with other function location
+        self.write_instr(OpCode::GetGlobal);
+        self.write_byte(BUILTIN_FUNC_INDICES[func_name] as u8);
+    }
+
+    fn implicit_native_call(&mut self, func_name: &str, args: &[&Expr]) {
+        self.write_native(func_name);
+        for arg in args {
+            self.code_expr_as_is(arg);
+        }
+        self.write_instr(OpCode::Call);
+        self.write_byte(args.len() as u8);
     }
 
     /// Returns the index of the new byte.
@@ -372,6 +380,11 @@ impl Generator {
     /// Codes an expression, casting or converting to string if needed.
     /// Panics otherwise, as invalid coercions should be caught during analysis.
     fn code_expr_with_cast(&mut self, expected: &ValueType, expr: &Expr) {
+        if *expected == ValueType::Unchecked {
+            // I made a mistake during analysis
+            internal_error!("Unchecked type persisted to codegen")
+        }
+
         let expr_type = self.get_expr_type(expr);
         if expr_type == expected {
             self.code_expr_as_is(expr);
@@ -386,8 +399,8 @@ impl Generator {
         } else if *expected == ValueType::String {
             // No string cast, so we call __str instead
             self.write_instr(OpCode::GetGlobal);
-            let to_str_index = &BUILTIN_FUNC_INDICES["to_str"];
-            self.write_byte(*to_str_index as u8);
+            let to_string_index = BUILTIN_FUNC_INDICES["str"];
+            self.write_byte(to_string_index as u8);
             self.code_expr_as_is(expr);
             self.write_instr(OpCode::Call);
             self.write_byte(1);
@@ -675,12 +688,12 @@ impl ExprVisitor<'_, ()> for Generator {
                 return;
             }
             TokenType::DoubleDot => {
-                let operands = self.context.function.code.split_off(before_operands);
-                self.write_instr(todo!(/*TODO*/"LoadNative"));
-                for byte in operands {
-                    self.write_byte(byte);
-                }
-                self.write_instr(todo!(/*TODO*/"CallNative"));
+                // we already wrote the operands but the function has to come before,
+                // so we pop them off then write them back on after the function
+                let operands_code = self.context.function.code.split_off(before_operands);
+                self.write_native("new_range");
+                self.context.function.code.extend(operands_code);
+                self.write_instr(OpCode::Call);
                 self.write_byte(2);
                 return;
             }
@@ -734,7 +747,13 @@ impl ExprVisitor<'_, ()> for Generator {
             }
             ValueType::Bool => panic!("Boolean operands should be in Expr::Logical"),
             ValueType::String => match op.kind() {
-                TokenType::Plus => self.write_instr(OpCode::StrConcat),
+                TokenType::Plus => {
+                    let operands_code = self.context.function.code.split_off(before_operands);
+                    self.write_native("str_concat");
+                    self.context.function.code.extend(operands_code);
+                    self.write_instr(OpCode::Call);
+                    self.write_byte(2);
+                }
                 TokenType::Less => self.write_instr(OpCode::FloatLess),
                 TokenType::Greater => self.write_instr(OpCode::FloatGreater),
                 TokenType::GreaterEqual => {
@@ -747,7 +766,17 @@ impl ExprVisitor<'_, ()> for Generator {
                 }
                 _ => panic!("Invalid operator made it to codegen")
             }
-            _ => panic!("Invalid type made it to codegen")
+            ValueType::List(_) => match op.kind() {
+                TokenType::Plus => {
+                    let operands_code = self.context.function.code.split_off(before_operands);
+                    self.write_native("list_concat");
+                    self.context.function.code.extend(operands_code);
+                    self.write_instr(OpCode::Call);
+                    self.write_byte(2);
+                }
+                tok => internal_error!("Invalid binary operator ({:?})", tok)
+            }
+            _ => internal_error!("{:?} is an invalid binary operand type", both)
         }
     }
 
@@ -842,7 +871,7 @@ impl ExprVisitor<'_, ()> for Generator {
             ValueType::Function(func) => {
                 params = func.params;
             }
-            _ => panic!()
+            _ => internal_error!("Invalid callee type")
         }
         // We know the arg & param length are the same
         for (arg, param) in args.iter().zip(params.iter()) {
@@ -855,7 +884,7 @@ impl ExprVisitor<'_, ()> for Generator {
     fn visit_variable_expr(&mut self, identifier: &Token, id: usize) -> () {
         self.update_loc(identifier);
 
-        match self.bindings.remove(&id).expect("Variable expr should be bound") {
+        match self.bindings[&id] {
             Binding::Stack(index) => {
                 self.write_instr(OpCode::GetLocal);
                 self.write_byte(index as u8);
@@ -924,18 +953,41 @@ impl ExprVisitor<'_, ()> for Generator {
     
     fn visit_get_expr(&mut self,
         obj: &'_ Box<Expr>, property: &'_ Token, id: usize) -> () {
-        todo!()
+
+        let property_str = property.lexeme().unwrap().as_str();
+        
+        match self.get_expr_type(obj) {
+            ValueType::Any => todo!(),
+            ValueType::String => match property_str {
+                "len" => self.implicit_native_call("str_len", &[obj]),
+                _ => internal_error!("Invalid string field access"),
+            }
+            ValueType::List(_) => match property_str {
+                "len" => self.implicit_native_call("list_len", &[obj]),
+                _ => internal_error!("Invalid list field access"),
+            }
+            ValueType::Range(_) => match property_str {
+                "start" => self.implicit_native_call("range_start", &[obj]),
+                "end" => self.implicit_native_call("range_end", &[obj]),
+                _ => internal_error!("Invalid range field access"),
+            },
+            ValueType::Object(object_type) => todo!(),
+            other => internal_error!("Can't .get from a {:?} expr", other)
+        }
     }
     
     fn visit_list_expr(&mut self,
         items: &'_ Vec<Expr>, id: usize) -> () {
-        // TODO IMPORTANT!!! prevent cycles in any[] pls
         let ValueType::List(item_type) = self.expr_types[&id].clone()
-            else { panic!() };
+            else { panic!("") };
+        self.write_instr(OpCode::GetGlobal);
+        self.write_byte(BUILTIN_FUNC_INDICES["new_list"]
+            .try_into()
+            .expect("Should be <= 255 builtin functions"));
         for expr in items {
-            self.code_expr_with_cast(&item_type, expr);
-        }
-        self.write_instr(OpCode::List);
+                self.code_expr_with_cast(&item_type, expr);
+            }
+        self.write_instr(OpCode::Call);
         self.write_byte(items.len() as u8);
     }
 }

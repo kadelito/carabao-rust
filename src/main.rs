@@ -4,17 +4,18 @@ mod lexing;
 mod parsing;
 mod expr_ast;
 mod stmt_ast;
-mod vm;
+mod runtime;
 mod debug;
 mod values;
 mod analysis;
 mod codegen;
 mod types;
 mod standard_library;
+mod errors;
 
 use std::{env, fs, process};
 
-use crate::{analysis::UsageError, debug::DebugRuntimeError, parsing::ParseError, vm::RuntimeError};
+use crate::{analysis::UsageError, debug::DebugRuntimeError, parsing::ParseError, runtime::RuntimeError};
 use crate::standard_library::registry;
 
 fn main() -> Result<(), ProgramError> {
@@ -38,7 +39,7 @@ fn run(config: &Config) -> Result<(), ProgramError> {
     let contents = fs::read_to_string(&config.filepath)
         .map_err(|_e| ProgramError::IOError)?;
         
-    vm::interpret(&contents)
+    runtime::interpret(&contents)
 }
 
 #[derive(Debug, PartialEq)]
@@ -81,7 +82,7 @@ mod main_tests {
 
     #[test]
     fn hello_world() {
-        let mut vm = vm::from(r#"
+        let mut vm = runtime::from(r#"
         new hello = "Hello "
         new world = "world!"
         <<(hello + world)
@@ -91,7 +92,7 @@ mod main_tests {
 
     #[test]
     fn scopes_and_shadowing() {
-        let mut vm = vm::from(r#"
+        let mut vm = runtime::from(r#"
         new x = 1
         {
             new x = 2
@@ -110,7 +111,7 @@ mod main_tests {
         assert_eq!(vm.run(), Ok(TypedValue::Int(2)));
         assert_eq!(vm.run(), Ok(TypedValue::Int(1)));
 
-        let mut vm = vm::from(r#"
+        let mut vm = runtime::from(r#"
         func get_x(): int {
             return x
         }
@@ -125,7 +126,7 @@ mod main_tests {
 
     #[test]
     fn euclidean_algorithm() {
-        let mut vm = vm::from(r#"
+        let mut vm = runtime::from(r#"
         func gcd(int a, int b): int {
             if b == 0: return a
             new mod = a % b
@@ -148,7 +149,7 @@ mod main_tests {
 
     #[test]
     fn stack_consistency() {
-        let mut vm = vm::from(r#"
+        let mut vm = runtime::from(r#"
         {
             new x = 1
             <<x

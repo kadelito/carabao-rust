@@ -4,6 +4,7 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use crate::analysis::analyze;
+use crate::errors::macros::internal_error;
 use crate::registry::GLOBAL_FUNCS;
 use crate::codegen::*;
 use crate::parsing::Parser;
@@ -48,7 +49,6 @@ macro_rules! vm_binary_op {
 }
 
 pub fn interpret(src: &str) -> Result<(), ProgramError> {
-
     let parser = Parser::from(src);
     let stmts = parser.parse()
         .map_err(|errs| ProgramError::ParseError(errs))?;
@@ -297,11 +297,6 @@ impl VM {
                 self.stack.push(TypedValue::None);
                 return Ok(SuccessStatus::ReturnTop(value));
             }
-            OpCode::List => {
-                let new_list_start = self.stack.len() - self.read_byte() as usize;
-                let list = self.stack.split_off(new_list_start);
-                self.stack.push(TypedValue::from(list))
-            }
             OpCode::IndexGet => {
                 let index = pop_val!(Int) as usize;
                 let list = pop_val!(List);
@@ -348,12 +343,6 @@ impl VM {
                 let b = stack_pop!();
                 let a = stack_pop!();
                 self.stack.push(TypedValue::Bool(a == b));
-            },
-            OpCode::StrConcat => {
-                let s2 = pop_val!(String);
-                let s1 = pop_val!(String);
-                self.stack.push(TypedValue::String([s1, s2].concat()
-                    .into_boxed_slice().into()));
             },
             OpCode::FloatAdd => binary_op!(Float +: Float),
             OpCode::FloatSub => binary_op!(Float -: Float),
