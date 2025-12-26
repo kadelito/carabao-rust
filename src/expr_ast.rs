@@ -2,7 +2,7 @@ use crate::lexing::Token;
 use crate::types::*;
 use crate::values::*;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Expr {
     // TODO the commented-out ones
     Conditional { condition: Box<Expr>, if_true: Box<Expr>, if_false: Box<Expr>, id: usize },

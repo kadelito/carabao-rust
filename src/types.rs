@@ -30,7 +30,6 @@ pub enum ValueType {
     // my god they're generic
     Range(Box<ValueType>),
     Function(Box<FunctionType>),
-    OverloadSet(Vec<FunctionType>),
     Object(Box<ObjectType>),
     List(Box<ValueType>),
 }
@@ -69,8 +68,6 @@ impl Display for ValueType {
                         .join(", ")),
             ValueType::List(t) => write!(f, "{}[]", t.to_string()),
             ValueType::Object(_) => todo!(),
-            ValueType::OverloadSet(functions) => 
-                panic!("OverloadSet should not be displayed"),
         }
     }
 }
@@ -108,7 +105,6 @@ impl ValueType {
             ValueType::List(_)
             => TypedValue::List(Rc::new(RefCell::new(Vec::new()))),
             ValueType::Object(_) => todo!(),
-            ValueType::OverloadSet(function_types) => unreachable!(),
         }
     }
 
@@ -148,11 +144,11 @@ impl ValueType {
             
     }
 
-    pub fn coerce_binary(type1: &ValueType, op: TokenType, type2: &ValueType) -> Option<ValueType> {
+    pub fn coerce_binary(type1: &ValueType, is_adding: bool, type2: &ValueType) -> Option<ValueType> {
         if type1 == type2 {
             // Already the same type
             Some(type1.clone())
-        } else if op == TokenType::Plus && [type1, type2].contains(&&ValueType::String) {
+        } else if is_adding && [type1, type2].contains(&&ValueType::String) {
             // val1 is a string
             Some(ValueType::String)
         } else {

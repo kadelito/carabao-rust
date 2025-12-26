@@ -1,6 +1,4 @@
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
 
 use crate::errors::macros::internal_error;
 use crate::expr_ast::*;
@@ -74,6 +72,7 @@ pub enum UsageError {
     DontGotFields,
     NoSuchField,
     CantCallThat,
+    InvalidSlice,
 }
 
 struct FunctionContext<'ast> {
@@ -116,7 +115,7 @@ struct Resolver<'ast> {
     errors: Vec<UsageError>,
     /// Global variables only.
     /// No main script locals or variables in functions.
-    bindings: Vec<VarData>,
+    global_bindings: Vec<VarData>,
     final_data: AnalysisResult,
 }
 
@@ -124,7 +123,7 @@ impl Resolver<'_> {
     fn new() -> Self {
         Self {
             context: FunctionContext::new(true),
-            bindings: Vec::new(),
+            global_bindings: Vec::new(),
             errors: Vec::new(),
             final_data: AnalysisResult::new(),
         }
@@ -133,10 +132,9 @@ impl Resolver<'_> {
 
 #[derive(Debug, Clone)]
 struct VarData {
-    pub name: String,
-    pub val_type: ValueType,
-    /// how many blocks into the function
-    pub depth: usize,
+    name: String,
+    val_type: ValueType,
+    depth: usize,
 }
 
 impl<'ast> Resolver<'ast> {
@@ -172,38 +170,56 @@ impl<'ast> Resolver<'ast> {
         expr_type
     }
 
-    fn get_var(&mut self, ident: &String) -> Option<(Binding, &mut VarData)> {
+    fn get_identifier(&self, ident: &str) -> Option<(Binding, &VarData)> {
         use Binding::*;
 
         // Look in locals first
-        let mut overload_bonus = 0;
-        for (i, data) in self.context.local_bindings.iter_mut().enumerate().rev() {
-            // Reversed because stack
-            if *data.name == *ident {
-                return Some((Stack(i + overload_bonus), data));
-            } else if let ValueType::OverloadSet(funcs) = &data.val_type {
-                overload_bonus += funcs.len() - 1;
+        for (slot, data) in self.context.local_bindings.iter().enumerate().rev() {
+            if data.name == *ident {
+                return Some((Stack(slot), data));
+            }
+        }
+
+        // TODO class fields?
+
+        // Look in globals next
+        for (slot, data) in self.global_bindings.iter().enumerate().rev() {
+            if data.name == *ident {
+                return Some((Globals(slot), data));
+            }
+        }
+
+        None
+    }
+
+    // Returns all accessible info corresponding to an identifier,
+    // in order of declaration.
+    fn get_all_identifiers(&self, ident: &str) -> Vec<(Binding, &VarData)> {
+        use Binding::*;
+
+        let mut declarations = Vec::new();
+
+        // Look in locals first
+        for (slot, data) in self.context.local_bindings.iter().enumerate() {
+            if data.name == *ident {
+                declarations.push((Stack(slot), data));
             }
         }
 
         // Look in globals next
-        let mut overload_bonus = 0;
-        for (i, data) in self.bindings.iter_mut().enumerate().rev() {
-            if *data.name == *ident {
-                return Some((Globals(i + overload_bonus), data));
-            } else if let ValueType::OverloadSet(funcs) = &data.val_type {
-                overload_bonus += funcs.len() - 1;
+        for (slot, data) in self.global_bindings.iter().enumerate() {
+            if data.name == *ident {
+                declarations.push((Globals(slot), data));
             }
         }
-        // Not in either
-        None
+
+        declarations
     }
 
     fn declare_global(&mut self, name: String, val_type: ValueType) {
-        let globals = &mut self.bindings;
-        globals.push(VarData {
+        self.global_bindings.push(VarData {
             name,
-            val_type: val_type,
+            val_type,
             depth: 0,
         });
     }
@@ -302,123 +318,84 @@ impl<'ast> Resolver<'ast> {
             params,
             body,
         } = func;
-        let mut inner = FunctionContext::new(false);
-
-        inner.local_bindings.push(VarData {
-            name: name.to_owned(),
-            val_type: ValueType::func_type(ret_type, params),
-            depth: 0,
-        });
-        for (name, pm_type) in params {
-            inner.local_bindings.push(VarData {
-                name: name.copy_ident(),
-                val_type: pm_type.clone(),
-                depth: 0,
-            });
-        }
+        let inner = FunctionContext::new(false);
 
         let old = std::mem::replace(&mut self.context, inner);
+
+        self.declare_local(name.to_owned(), ValueType::func_type(ret_type, params));
+        for (name, pm_type) in params {
+            self.declare_local(name.copy_ident(), pm_type.clone());
+        }
         for stmt in body {
             self.resolve_stmt(stmt);
         }
+
         self.context = old;
     }
 
-    fn resolve_call(&mut self, identifier: &Token, args: &[Expr]) -> ValueType {
-        let Some((mut binding, data)) = self.get_var(identifier.lexeme().unwrap()) else {
+    // Resolves an identifier being called.
+    fn resolve_ident_call(&mut self, identifier: &Token, callee_id: usize, args: &[&Expr]) -> ValueType {
+
+        // do this first bc `definitions` borrows from self as well        
+        let args = args.into_iter()
+            .map(|arg| (*arg, self.resolve_expr(arg)))
+            .collect::<Box<[(&Expr, ValueType)]>>();
+
+        let mut definitions = self.get_all_identifiers(identifier.lexeme().unwrap());
+        if definitions.is_empty() {
             return self.error_at_token(identifier, UsageError::UndefinedIdent);
-        };
-        let ret_type = match data.val_type.clone() {
-            ValueType::Unchecked => ValueType::Unchecked,
-            ValueType::Function(func) => {
-                let ret_type = self.resolve_call_single(args, callee, func.as_ref());
-                self.final_data.expr_types.insert(
-                    callee.id(),
-                    ValueType::Function(func)
-                );
-                ret_type
-            }
-            ValueType::OverloadSet(set) => match self.resolve_overload(&set, args) {
-                Some((index, func)) => {
-                    self.final_data.expr_types.insert(
-                        callee.id(),
-                        ValueType::Function(Box::new(func.clone())),
-                    );
-                    let ret_type = self.resolve_call_single(args, callee, func);
-                    // IMPORTANT!! adjust binding to point at the right definition
-                    binding = match binding {
-                        Binding::Stack(i) => Binding::Stack(i + index),
-                        Binding::Globals(i) => Binding::Globals(i + index),
-                    };
-                    ret_type
+        }
+
+        definitions.retain(|(_, data)| matches!(data.val_type, ValueType::Function(_)));
+        if definitions.is_empty() {
+            // No functions after filtering
+            return self.error_at_token(identifier, UsageError::CantCallThat);
+        }
+        
+        // Try to match the correct function (chronologically descending)
+        let mut correct_overload = None;
+
+        // Check for exact type matches
+        'next_func: for (binding, data) in definitions.iter().rev() {
+            let ValueType::Function(func) = &data.val_type else {
+                internal_error!("");
+            };
+
+            for (param_type, (_, arg_type)) in func.params.iter().zip(args.iter()) {
+                if param_type != arg_type {
+                    continue 'next_func;
                 }
-                None => self.error_at_expr(callee, UsageError::ParamMismatch),
-            },
-            other => self.error_msg_at_expr(
-                callee,
-                UsageError::TypeError,
-                &format!("Can't call type {:?}", other),
-            ),
-        };
-        self.final_data.bindings.insert(callee.id(), binding);
-        ret_type
-    }
-    }
+            }
+            correct_overload = Some((binding.clone(), func.clone()));
+            break;
+        }
 
-    /// Returns the `FunctionType` in an overload set that corresponds to some arguments,
-    /// or `Option::None` if the function does not correspond.
-    ///
-    /// RESOLVES THE GIVEN ARGUMENTS IN ADVANCE!!
-    fn resolve_overload<'set>(
-        &mut self,
-        set: &'set Vec<FunctionType>,
-        args: &[Expr],
-    ) -> Option<(usize, &'set FunctionType)> {
-        let arg_types = args
-            .iter()
-            .map(|arg| self.resolve_expr(arg))
-            .collect::<Vec<ValueType>>();
+        if correct_overload.is_none() {
+            // Search allowing coercions
+            'next_func: for (binding, data) in definitions.iter().rev() {
+                let ValueType::Function(func) = &data.val_type else {
+                    internal_error!("");
+                };
 
-        'next_function: for (index, func_type) in set.iter().enumerate().rev() {
-            if args.len() == func_type.params.len() {
-                for (param, arg_type) in func_type.params.iter().zip(arg_types.iter()) {
-                    if !ValueType::can_convert_type(param, arg_type) {
-                        continue 'next_function;
+                for (param_type, (_, arg_type)) in func.params.iter().zip(args.iter()) {
+                    if !ValueType::can_convert_type(param_type, arg_type) {
+                        continue 'next_func;
                     }
                 }
-                return Some((index, func_type));
+                correct_overload = Some((binding.clone(), func.clone()));
+                break;
             }
         }
-        None
-    }
 
-    fn resolve_call_single(
-        &mut self,
-        args: &[Expr],
-        callee: &Expr,
-        func_type: &FunctionType,
-    ) -> ValueType {
-        let mut args_match = true;
-        if args.len() != func_type.params.len() {
-            self.error_at_expr(callee, UsageError::ParamMismatch);
+        if let Some((correct_binding, func_type)) = correct_overload {
+            let ret = func_type.ret_type.clone();
+            self.final_data.expr_types.insert(callee_id, ValueType::Function(func_type));
+            self.final_data.bindings.insert(callee_id, correct_binding);
+            ret
         } else {
-            for (param, arg) in func_type.params.iter().zip(args.iter()) {
-                if !self.expect_type(param, arg) {
-                    args_match = false;
-                    self.error_at_expr(arg, UsageError::ParamMismatch);
-                }
-            }
+            // no function that matches
+            self.error_at_token(identifier, UsageError::ParamMismatch)
         }
-        if args_match {
-            // everything is correct, resolve body
-            // find identifier first
-            let ident = match callee {
-                Expr::Variable { identifier, .. } => identifier.copy_ident(),
-                _ => todo!("other expressions that can eval to func"),
-            };
-            self.finish_function_by_name(&ident);
-        }
-        func_type.ret_type.clone()
     }
 
     fn update_loc(&mut self, token: &Token) {
@@ -440,6 +417,7 @@ impl<'ast> StmtVisitor<'ast, ()> for Resolver<'ast> {
     ) {
         self.update_loc(name);
 
+        // TODO better
         let real_type = match (explicit_type, value) {
             // give it the any type
             (None, None) => ValueType::Any,
@@ -576,26 +554,14 @@ impl<'ast> StmtVisitor<'ast, ()> for Resolver<'ast> {
         _id: usize,
     ) {
         self.update_loc(name);
-        let temp_name = name.copy_ident();
-        let ValueType::Function(new_function_type) = ValueType::func_type(ret_type, params) else {
-            internal_error!("Funcion type creation donked up")
-        };
 
-        // overloading logic
-        let same_name = self.get_var(&temp_name);
-        if let Some((_, VarData { val_type, .. })) = same_name
-            && let ValueType::OverloadSet(funcs) = val_type
-        {
-            funcs.push(*new_function_type);
-        }
-        // after this point, the identifier has not already been defined as a function
-        else {
-            let new_overload_set = ValueType::OverloadSet(vec![*new_function_type]);
-            if self.in_global_scope() {
-                self.declare_global(temp_name, new_overload_set);
-            } else {
-                self.declare_local(temp_name, new_overload_set)
-            }
+        let temp_name = name.copy_ident();
+        let new_function_type = ValueType::func_type(ret_type, params);
+
+        if self.in_global_scope() {
+            self.declare_global(temp_name, new_function_type);
+        } else {
+            self.declare_local(temp_name, new_function_type)
         }
 
         // Wait for resolving until first call
@@ -630,7 +596,7 @@ impl<'ast> ExprVisitor<'_, ValueType> for Resolver<'ast> {
         self.expect_type(&ValueType::Bool, left);
         let true_type = self.resolve_expr(middle);
         let false_type = self.resolve_expr(right);
-        ValueType::coerce_binary(&true_type, TokenType::DoubleEqual, &false_type).unwrap_or({
+        ValueType::coerce_binary(&true_type, false, &false_type).unwrap_or({
             // not equal & couldn't coerce
             self.expect_resolved_type(&true_type, right, &false_type);
             ValueType::Unchecked
@@ -649,7 +615,7 @@ impl<'ast> ExprVisitor<'_, ValueType> for Resolver<'ast> {
         let left = self.resolve_expr(left);
         let right = self.resolve_expr(right);
         // TODO check overloaded
-        let Some(both) = ValueType::coerce_binary(&left, op.kind(), &right) else {
+        let Some(both) = ValueType::coerce_binary(&left, op.kind() == TokenType::Plus, &right) else {
             return self.error_at_token(op, UsageError::IncompatibleTypes);
         };
         self.final_data.bin_types.insert(id, both.clone());
@@ -734,7 +700,6 @@ impl<'ast> ExprVisitor<'_, ValueType> for Resolver<'ast> {
             }
             ValueType::Range(value_type) => todo!("adding numeric ranges?"),
             ValueType::Function { .. } => panic!(),
-            ValueType::OverloadSet(function_types) => panic!(),
             ValueType::Unchecked => panic!(),
         }
     }
@@ -751,7 +716,7 @@ impl<'ast> ExprVisitor<'_, ValueType> for Resolver<'ast> {
                 identifier,
                 id: var_id,
             } => {
-                match self.get_var(identifier.lexeme().unwrap()) {
+                match self.get_identifier(identifier.lexeme().unwrap()) {
                     Some((binding, data)) => {
                         let data = data.clone();
                         // record id of outermost assign, not the assignee
@@ -854,33 +819,29 @@ impl<'ast> ExprVisitor<'_, ValueType> for Resolver<'ast> {
             self.error_at_expr(args.last().unwrap(), UsageError::TooManyArgs);
         }
 
-        let args = args.as_slice();
+        let args = args.iter().collect::<Vec<&Expr>>();
         let callee = callee.as_ref();
 
         match callee {
-            Expr::Variable { identifier, .. } => 
-            _ => self.error_at_expr(callee, UsageError::CantCallThat),
+            Expr::Variable { identifier, id } => {
+                self.update_loc(identifier);
+                self.resolve_ident_call(identifier, *id, args.as_slice())
+            },
+            other => {
+                self.resolve_expr(other);
+                self.error_at_expr(callee, UsageError::CantCallThat)
+            },
         }
     }
 
     fn visit_variable_expr(&mut self, identifier: &Token, id: usize) -> ValueType {
         self.update_loc(identifier);
 
-        match self.get_var(identifier.lexeme().unwrap()) {
+        // TODO handle referencing an overload set individually
+
+        match self.get_identifier(identifier.lexeme().unwrap()) {
             Some((binding, data)) => {
                 let mut var_type = data.val_type.clone();
-                if let ValueType::OverloadSet(funcs) = var_type {
-                    // special logic for when a function (or multiple) are used outside of a call expression
-                    if funcs.len() == 1 {
-                        // there's exactly 1 corresponding function, not ambiguous
-                        var_type = ValueType::Function(Box::new(funcs[0].clone()))
-                    } else {
-                        // could be any overloaded function with the name
-                        // call expressions don't visit the callee, so the user is
-                        // passing overloaded functions willy-nilly
-                        return self.error_at_token(identifier, UsageError::WhichFunction);
-                    }
-                }
                 self.final_data.bindings.insert(id, binding);
                 var_type
             }
@@ -924,12 +885,17 @@ impl<'ast> ExprVisitor<'_, ValueType> for Resolver<'ast> {
         return match (seq_type, query_type) {
             (ValueType::String, ValueType::Int) => ValueType::Char,
             (ValueType::List(item_type), ValueType::Int) => *item_type,
-            // TODO actual slicing, not just indexing
-            // (_, ValueType::Range) => { *item_type },
-            (other_seq, _other_query) => {
-                self.error_at_expr(sequence, UsageError::CantIndexThat);
-                other_seq
+            (ValueType::String, ValueType::Range(bound_type)) => if *bound_type == ValueType::Int {
+                ValueType::String
+            } else {
+                self.error_at_expr(query, UsageError::InvalidSlice)
             }
+            (ValueType::List(item_type), ValueType::Range(bound_type)) => if *bound_type == ValueType::Int {
+                ValueType::List(item_type)
+            } else {
+                self.error_at_expr(query, UsageError::InvalidSlice)
+            }
+            _ => self.error_at_expr(sequence, UsageError::CantIndexThat)
         };
     }
 
@@ -941,9 +907,18 @@ impl<'ast> ExprVisitor<'_, ValueType> for Resolver<'ast> {
         id: usize,
     ) -> ValueType {
         self.update_loc(method);
+        
+        if args.len() + 1 >= u8::MAX.into() {
+            // im not doing CallWide, nobody needs >= 256 arguments
+            self.error_at_expr(args.last().unwrap(), UsageError::TooManyArgs);
+        }
 
-        /*TODO*/
-        todo!("Methods")
+        // Pretend the object is the first argument
+        let mut actual_args = vec![obj.as_ref()];
+        actual_args.extend(args.iter());
+
+        // resolve it as method(obj, args...)
+        self.resolve_ident_call(method, id, actual_args.as_slice())
     }
 
     fn visit_get_expr(&mut self, obj: &'_ Box<Expr>, property: &'_ Token, id: usize) -> ValueType {

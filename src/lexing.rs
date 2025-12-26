@@ -551,7 +551,7 @@ impl<'a> Lexer<'a> {
 #[derive(PartialEq, Clone)]
 pub struct Token {
     kind: TokenType,
-    pub lexeme: Option<String>,
+    lexeme: Option<String>,
     loc: TokenLocation,
     error: Option<TokenizationError>,
 }

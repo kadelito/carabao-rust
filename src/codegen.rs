@@ -866,13 +866,14 @@ impl ExprVisitor<'_, ()> for Generator {
     fn visit_call_expr(&mut self,
         callee: &Box<Expr>, args: &Vec<Expr>, _id: usize) -> () {
         self.code_expr_as_is(callee);
-        let params;
-        match self.get_expr_type(callee).clone() {
-            ValueType::Function(func) => {
-                params = func.params;
-            }
-            _ => internal_error!("Invalid callee type")
-        }
+        
+        let params = {
+            let ValueType::Function(func) = self.get_expr_type(callee) else {
+                internal_error!("Method type not recorded")
+            };
+            func.params.clone()
+        };
+
         // We know the arg & param length are the same
         for (arg, param) in args.iter().zip(params.iter()) {
             self.code_expr_with_cast(param, arg);
@@ -947,8 +948,33 @@ impl ExprVisitor<'_, ()> for Generator {
     }
     
     fn visit_method_expr(&mut self,
-        obj: &'_ Box<Expr>, method: &'_ Token, args: &'_ Vec<Expr>, id: usize) -> () {
-        todo!()
+        obj: &'_ Box<Expr>, _method: &'_ Token, args: &'_ Vec<Expr>, id: usize) -> () {
+        
+        match self.bindings.remove(&id) {
+            Some(Binding::Globals(index)) => {
+                self.write_instr(OpCode::GetGlobal);
+                self.write_byte(index as u8);
+            },
+            Some(Binding::Stack(index)) => {
+                self.write_instr(OpCode::GetLocal);
+                self.write_byte(index as u8);
+            },
+            None => internal_error!("Undefined method not caught"),
+        }
+        
+        let params = {
+            let ValueType::Function(func) = self.get_type_from_id(id) else {
+                internal_error!("Method type not recorded")
+            };
+            func.params.clone()
+        };
+
+        // we know the function has at least one parameter
+        self.code_expr_with_cast(&params[0], obj);
+        
+        for (param, arg) in params[1..].iter().zip(args.iter()) {
+            self.code_expr_with_cast(param, arg);
+        }
     }
     
     fn visit_get_expr(&mut self,
