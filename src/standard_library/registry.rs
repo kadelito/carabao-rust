@@ -1,9 +1,9 @@
-use std::{cell::LazyCell, collections::HashMap};
+use std::{cell::{LazyCell, RefCell}, collections::HashMap, rc::Rc};
 
 use crate::{
     standard_library::*, 
     types::ValueType,
-    values::{NativeFunction}
+    typed_values::*,
 };
 
 pub mod macros {
@@ -21,30 +21,30 @@ pub mod macros {
 macro_rules! native_func {
     // with accessible identifier
     ($ident_str: expr, $func_ptr: path as func($($params: ident),*) : $ret_type: ident) => {
-        ($ident_str, NativeFunction {
+        ($ident_str, TypedValue::NativeFunc(Rc::new(TypedNativeFunction {
             name: $ident_str,
             params: &[$(ValueType::$params),*],
             ret_type: ValueType::$ret_type,
             func: $func_ptr,
-        })
+        })))
     };
 
     // no accessible identifier or type info, name is for internal use only
     ($ident_str: expr, $func_ptr: path) => {
-        ("", NativeFunction {
+        ("", TypedValue::NativeFunc(Rc::new(TypedNativeFunction {
             name: $ident_str,
             params: &[],
             ret_type: ValueType::None,
             func: $func_ptr,
-        })
+        })))
     };
 }
 
 /// An array of functions and their identifiers, accessible in Carabao code.
 /// 
 /// Blank identifiers correspond to functions that can only be called implicitly.
-pub const GLOBAL_FUNCS: [(&'static str, NativeFunction); 11] = [
-    // native functions available to the user
+pub const GLOBAL_FUNCS: LazyCell<[(&'static str, TypedValue); 14]> = LazyCell::new(|| [
+    // native functions available to the user in global scope
     // the string arg refers to the identfier & internal name
     native_func!("print",   builtins::print    as func(Any): None),
     native_func!("println", builtins::println  as func(Any): None),
@@ -53,14 +53,19 @@ pub const GLOBAL_FUNCS: [(&'static str, NativeFunction); 11] = [
 
     // internal, type-unchecked functions
     // the string is the internal name, not identifier
-    native_func!("str_len", strings::str_len),
-    native_func!("str_concat", strings::str_concat),
-    native_func!("list_len", iterables::lists::list_len),
+    native_func!("str_len", strings::len),
+    native_func!("str_concat", strings::concat),
+    native_func!("str_slice", strings::slice),
+
+    native_func!("list_len", iterables::lists::len),
+    native_func!("list_concat", iterables::lists::concat),
+    native_func!("list_slice", iterables::lists::slice),
     native_func!("new_list", iterables::lists::new_list),
+
     native_func!("new_range", iterables::ranges::new_range),
     native_func!("range_start", iterables::ranges::range_get_start),
     native_func!("range_end", iterables::ranges::range_get_end),
-];
+]);
 
 /// Maps static string slices to indices to the global funcs list.
 /// 
@@ -74,8 +79,15 @@ pub const GLOBAL_FUNCS: [(&'static str, NativeFunction); 11] = [
 /// located with their corresponding index in global slots.
 pub const BUILTIN_FUNC_INDICES: LazyCell<HashMap<&'static str, usize>> = LazyCell::new(|| {
     let mut map = HashMap::new();
-    for (index, (_, func)) in GLOBAL_FUNCS.iter().enumerate() {
-        map.insert(func.name,index);
+    for (index, (ident, val)) in GLOBAL_FUNCS.iter().enumerate() {
+        match val {
+            TypedValue::NativeFunc(func) => { map.insert(func.name,index); },
+            _ => {
+                // TODO replace with other things
+                assert!(!ident.is_empty());
+                assert_eq!(map.insert(ident, index), None);
+            }
+        }
     }
     map
 });

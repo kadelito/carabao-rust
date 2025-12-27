@@ -2,14 +2,14 @@ use std::mem::discriminant;
 
 use crate::expr_ast::*;
 use crate::lexing::*;
-use crate::values::*;
+use crate::typed_values::*;
 use crate::stmt_ast::*;
 use crate::types::*;
 
 pub mod opcodes {
-    use crate::{registry::GLOBAL_FUNCS, codegen::OpCode, types::ValueType, values::{Function, TypedValue}};
+    use crate::{registry::GLOBAL_FUNCS, codegen::OpCode, types::ValueType, typed_values::{TypedFunction, TypedValue}};
 
-    pub fn disassemble(func: &Function) {
+    pub fn disassemble(func: &TypedFunction) {
         
         // like 'pow(float, int): float'
         let sig = format!("{}({}): {:?}",
@@ -46,9 +46,7 @@ pub mod opcodes {
                 | OpCode::Crash
                 | OpCode::IndexGet
                 | OpCode::IndexSet
-                | OpCode::Slice
                 | OpCode::StrIndex
-                | OpCode::StrSlice
 
                 | OpCode::IntToFloat
                 | OpCode::BoolToFloat
@@ -99,7 +97,8 @@ pub mod opcodes {
                 }
                 OpCode::GetLocal
                 | OpCode::SetLocal
-                | OpCode::Call 
+                | OpCode::CallNative
+                | OpCode::CallUser
                 | OpCode::LoadByte => {
                     let b= reader.byte();
                     println!("{b:02}");
@@ -129,7 +128,7 @@ pub mod opcodes {
     }
     
     struct Reader<'f> {
-        func: &'f Function,
+        func: &'f TypedFunction,
         ip: usize,
         prev_line: u32,
     }
@@ -302,18 +301,6 @@ impl ExprVisitor<'_, String> for AstPrinter {
     fn visit_slice_expr(&mut self,
         sequence: &'_ Box<Expr>, query: &'_ Box<Expr>, _id: usize) -> String {
         format!("{}[{}]", self.to_str(sequence), self.to_str(query))
-    }
-    
-    fn visit_method_expr(&mut self,
-        obj: &'_ Box<Expr>, method: &'_ Token, args: &'_ Vec<Expr>, _id: usize) -> String {
-        format!("{}.{}({})",
-            self.to_str(obj),
-            method.lexeme().unwrap(),
-            args.iter()
-                .map(|expr| self.to_str(&expr))
-                .collect::<Vec<String>>()
-                .join(", ")
-        )
     }
     
     fn visit_get_expr(&mut self,

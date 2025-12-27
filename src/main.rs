@@ -6,12 +6,13 @@ mod expr_ast;
 mod stmt_ast;
 mod runtime;
 mod debug;
-mod values;
+mod typed_values;
 mod analysis;
 mod codegen;
 mod types;
 mod standard_library;
 mod errors;
+mod runtime_values;
 
 use std::{env, fs, process};
 
@@ -77,7 +78,7 @@ impl Config {
 
 #[cfg(test)]
 mod main_tests {
-    use crate::values::TypedValue;
+    use crate::typed_values::TypedValue;
     use super::*;
 
     #[test]

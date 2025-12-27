@@ -1,3 +1,4 @@
+use std::cell::LazyCell;
 use std::fmt::format;
 use std::iter::Map;
 use std::rc::Rc;
@@ -10,7 +11,7 @@ use crate::codegen::*;
 use crate::parsing::Parser;
 use crate::ProgramError;
 use crate::types::ValueType;
-use crate::values::*;
+use crate::typed_values::*;
 
 const VM_STACK_CAPACITY: usize = 16384;
 const VM_CALLS_CAPACITY: usize = 256;
@@ -72,7 +73,7 @@ pub fn from(src: &str) -> Result<VM, ProgramError> {
     Ok(VM::new(main_script))
 }
 
-pub fn run(function: Function) -> Result<(), ProgramError> {
+pub fn run(function: TypedFunction) -> Result<(), ProgramError> {
     if cfg!(feature = "dont_run") {
         Ok(())
     } else {   
@@ -96,13 +97,13 @@ pub struct VM {
 }
 
 struct Frame {
-    function: Rc<Function>,
+    function: Rc<TypedFunction>,
     ip: usize,
     stack_bottom: usize,
 }
 
 impl Frame {
-    fn new(function: Function, stack_bottom: usize) -> Self {
+    fn new(function: TypedFunction, stack_bottom: usize) -> Self {
         Self { function: Rc::new(function), ip: 0, stack_bottom }
     }
 }
@@ -126,7 +127,7 @@ enum SuccessStatus {
 }
 
 impl VM {
-    pub fn new(function: Function) -> Self {
+    pub fn new(function: TypedFunction) -> Self {
         let mut new = Self {
             call_stack: Vec::with_capacity(64),
             stack: Vec::with_capacity(VM_STACK_CAPACITY),
@@ -135,8 +136,8 @@ impl VM {
             prev_line: 0
         };
         new.call_stack.push(Frame::new(function, 0));
-        for (_, obj) in GLOBAL_FUNCS {
-            new.globals.push(TypedValue::from(obj));
+        for (_, val) in GLOBAL_FUNCS.iter() {
+            new.globals.push(val.clone());
         }
         new
     }
@@ -224,27 +225,29 @@ impl VM {
                     self.top_frame().ip = self.top_frame().ip.strict_add_signed(offset as isize);
                 }
             }
-            OpCode::Call => {
+            OpCode::CallUser => {
                 // stack top atp: [func,arg1...argN]
                 let num_args = self.read_byte() as usize;
                 let new_bottom = self.stack.len() - num_args - 1;
-                match self.stack_peek(num_args) {
-                    TypedValue::Function(function) => {
-                        #[cfg(feature = "runtime_trace")]
-                        {
-                            println!("\t-->--> Entering {}", function.name);
-                        }
-                        self.call_stack.push(Frame { function, ip: 0, stack_bottom: new_bottom });
-                    }
-                    TypedValue::NativeFunc(function) => {
-                        let NativeFunction { func, .. } = function.as_ref();
-                        let args = &self.stack[new_bottom + 1..];
-                        let result = func(args);
-                        self.stack.truncate(new_bottom);
-                        self.stack.push(result);
-                    }
-                    _ => panic!()
+                let TypedValue::Function(function) = self.stack[new_bottom].clone() else {
+                    internal_error!("Expected a function, got {:?}", self.stack[new_bottom])
+                };
+                #[cfg(feature = "runtime_trace")]
+                {
+                    println!("\t-->--> Entering {}", function.name);
                 }
+                self.call_stack.push(Frame { function, ip: 0, stack_bottom: new_bottom });
+            }
+            OpCode::CallNative => {
+                let num_args = self.read_byte() as usize;
+                let new_bottom = self.stack.len() - num_args - 1;
+                let args = &self.stack[new_bottom + 1..];
+                let TypedValue::NativeFunc(func) = self.stack[new_bottom].clone() else {
+                    internal_error!("Expected a function, got {:?}", self.stack[new_bottom])
+                };
+                let result = (func.func)(args);
+                self.stack.truncate(new_bottom);
+                self.stack.push(result);
             }
             OpCode::GetLocal => {
                 let index = self.top_frame().stack_bottom + self.read_byte() as usize;
@@ -310,7 +313,6 @@ impl VM {
                 let new_value = self.stack_peek(0); // cloned here
                 list.borrow_mut()[index] = new_value;
             }
-            OpCode::Slice => todo!(),
             OpCode::StrIndex => {
                 let index = pop_val!(Int) as usize;
                 let string = pop_val!(String);
@@ -321,7 +323,6 @@ impl VM {
                     )
                 );
             },
-            OpCode::StrSlice => todo!(),
             OpCode::AnyToInt => unwrap_any!(Int),
             OpCode::AnyToFloat => unwrap_any!(Float),
             OpCode::AnyToBool => unwrap_any!(Bool),

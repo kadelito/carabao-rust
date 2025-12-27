@@ -1,5 +1,5 @@
-use crate::{standard_library::registry::macros::val_into, values::TypedValue};
-use std::io::Write;
+use crate::{standard_library::registry::macros::val_into, typed_values::TypedValue};
+use std::{io::Write};
 
 pub fn to_string(args: &[TypedValue]) -> TypedValue {
     let mut buf = Vec::new();
@@ -9,18 +9,25 @@ pub fn to_string(args: &[TypedValue]) -> TypedValue {
     TypedValue::from(str)
 }
 
-pub fn debug_str(args: &[TypedValue]) -> TypedValue {
-    let TypedValue::Any(inner) = &args[0] else { panic!() };
-    format!("{:?}", inner).into()
-}
-
-pub fn str_len(args: &[TypedValue]) -> TypedValue {
+pub fn len(args: &[TypedValue]) -> TypedValue {
     let TypedValue::String(s) = &args[0] else { panic!() };
     TypedValue::Int(s.len() as i64)
 }
 
-pub fn str_concat(args: &[TypedValue]) -> TypedValue {
+pub fn concat(args: &[TypedValue]) -> TypedValue {
     let s1 = val_into!(&args[0] => String).clone();
     let s2 = val_into!(&args[1] => String).clone();
     TypedValue::String([s1, s2].concat().into_boxed_slice().into())
+}
+
+pub fn slice(args: &[TypedValue]) -> TypedValue {
+    let str = val_into!(&args[0] => String);
+    let range = val_into!(&args[1] => Range);
+    let (start_val, end_val) = range.as_ref();
+    let (start, end) = (
+        *val_into!(start_val => Int) as usize,
+        *val_into!(end_val => Int) as usize
+    );
+    let sliced = (&str[start..end]).into(); // idk what actually happens :3
+    TypedValue::String(sliced)
 }

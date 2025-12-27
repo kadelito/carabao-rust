@@ -1,6 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 
-use crate::{values::TypedValue, errors::macros::internal_error};
+use crate::{typed_values::TypedValue};
 
 pub mod ranges {
 
@@ -35,17 +35,30 @@ pub mod lists {
         TypedValue::List(Rc::new(RefCell::new(elements)))
     }
 
-    pub fn list_len(args: &[TypedValue]) -> TypedValue {
+    pub fn len(args: &[TypedValue]) -> TypedValue {
         let list = val_into!(&args[0] => List);
         TypedValue::Int(list.borrow().len() as i64)
     }
 
-    pub fn list_concat(args: &[TypedValue]) -> TypedValue {
+    pub fn concat(args: &[TypedValue]) -> TypedValue {
         let l2 = val_into!(&args[0] => List);
         let l1 = val_into!(&args[1] => List);
         let mut new_list = Vec::with_capacity(l1.borrow().len() + l2.borrow().len());
         new_list.extend_from_slice(l1.borrow().as_slice());
         new_list.extend_from_slice(l2.borrow().as_slice());
         TypedValue::from(new_list)
+    }
+
+    pub fn slice(args: &[TypedValue]) -> TypedValue {
+        let list = val_into!(&args[0] => List).borrow();
+        let (start, end) = {
+            let range = val_into!(&args[1] => Range);
+            let (start_val, end_val) = range.as_ref();
+            (*val_into!(start_val => Int) as usize,
+             *val_into!(end_val => Int) as usize)
+        };
+
+        let sliced = Rc::new(RefCell::new(list[start..end].to_vec())); // idk what actually happens :3
+        TypedValue::List(sliced)
     }
 }

@@ -10,7 +10,6 @@ Cast        = expr: Expr | new_type: ValueType
 Unary       = op: Token | target: Expr | prefix: bool
 Slice       = sequence: Expr | query: Expr
 Call        = callee: Expr | args: Vec<Expr>
-Method      = obj: Expr | method: Token | args: Vec<Expr>
 Get         = obj: Expr | property: Token
 List        = items: Vec<Expr>
 Variable    = identifier: Token

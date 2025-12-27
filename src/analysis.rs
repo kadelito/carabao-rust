@@ -6,18 +6,19 @@ use crate::lexing::{Token, TokenType};
 use crate::registry::GLOBAL_FUNCS;
 use crate::stmt_ast::{Stmt, StmtVisitor};
 use crate::types::*;
-use crate::values::*;
+use crate::typed_values::*;
 
 pub fn analyze(program: &Vec<Stmt>) -> Result<AnalysisResult, Vec<UsageError>> {
     let mut resolver = Resolver::new();
 
-    for (name, obj) in GLOBAL_FUNCS {
+    for (name, obj) in GLOBAL_FUNCS.iter() {
         resolver.declare_global(
             (*name).to_owned(),
             if name.is_empty() {
-                ValueType::Unchecked // these will never appear in user code and are
+                // these will never appear in user code, just here to preserve spacing
+                ValueType::Unchecked
             } else {
-                TypedValue::from(obj).get_type()
+                obj.get_type()
             },
         );
     }
@@ -417,7 +418,7 @@ impl<'ast> StmtVisitor<'ast, ()> for Resolver<'ast> {
     ) {
         self.update_loc(name);
 
-        // TODO better
+        // TODO better 'declared-no-value' semantics than this
         let real_type = match (explicit_type, value) {
             // give it the any type
             (None, None) => ValueType::Any,
@@ -827,6 +828,21 @@ impl<'ast> ExprVisitor<'_, ValueType> for Resolver<'ast> {
                 self.update_loc(identifier);
                 self.resolve_ident_call(identifier, *id, args.as_slice())
             },
+            Expr::Get { obj, property, id } => {        
+                self.update_loc(property);
+                
+                if args.len() + 1 >= u8::MAX.into() {
+                    // im not doing CallWide, nobody needs >= 256 arguments
+                    self.error_at_expr(args.last().unwrap(), UsageError::TooManyArgs);
+                }
+
+                // Pretend the object is the first argument
+                let mut actual_args = vec![obj.as_ref()];
+                actual_args.extend(args.iter());
+
+                // resolve it as property(obj, args...)
+                self.resolve_ident_call(property, *id, actual_args.as_slice())
+            }
             other => {
                 self.resolve_expr(other);
                 self.error_at_expr(callee, UsageError::CantCallThat)
@@ -897,28 +913,6 @@ impl<'ast> ExprVisitor<'_, ValueType> for Resolver<'ast> {
             }
             _ => self.error_at_expr(sequence, UsageError::CantIndexThat)
         };
-    }
-
-    fn visit_method_expr(
-        &mut self,
-        obj: &'_ Box<Expr>,
-        method: &'_ Token,
-        args: &'_ Vec<Expr>,
-        id: usize,
-    ) -> ValueType {
-        self.update_loc(method);
-        
-        if args.len() + 1 >= u8::MAX.into() {
-            // im not doing CallWide, nobody needs >= 256 arguments
-            self.error_at_expr(args.last().unwrap(), UsageError::TooManyArgs);
-        }
-
-        // Pretend the object is the first argument
-        let mut actual_args = vec![obj.as_ref()];
-        actual_args.extend(args.iter());
-
-        // resolve it as method(obj, args...)
-        self.resolve_ident_call(method, id, actual_args.as_slice())
     }
 
     fn visit_get_expr(&mut self, obj: &'_ Box<Expr>, property: &'_ Token, id: usize) -> ValueType {

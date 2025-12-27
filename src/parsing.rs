@@ -5,7 +5,7 @@ use crate::{
     expr_ast::*,
     lexing::*,
     stmt_ast::Stmt,
-    values::*,
+    typed_values::*,
     types::*,
 };
 
@@ -507,12 +507,7 @@ impl<'a> Parser<'a> {
             } else if self.try_consume(TokenType::Dot) {
                 self.expect(TokenType::Identifier);
                 let attribute = self.take_prev();
-                if self.try_consume(TokenType::OpenParen) {
-                    let args = self.expr_list(TokenType::CloseParen);
-                    obj = Expr::Method { obj: Box::new(obj), method: attribute, args, id }
-                } else {
-                    obj = Expr::Get { obj: Box::new(obj), property: attribute, id };
-                }
+                obj = Expr::Get { obj: Box::new(obj), property: attribute, id };
             } else if self.try_consume(TokenType::OpenBracket) {
                 let query = Box::new(self.expression(true));
                 self.expect(TokenType::CloseBracket);
@@ -624,9 +619,23 @@ impl<'a> Parser<'a> {
         } else if self.try_consume(TokenType::CharLiteral) {
             let mut literal = self.take_prev();
             let lexeme = literal.take_lexeme().unwrap();
-            let mut chars = lexeme.chars();
-            chars.next(); // Consume opening quote
-            let val = TypedValue::Char(chars.next().unwrap());
+            let lexeme = lexeme.chars().collect::<Box<[char]>>();
+            let val = if lexeme[1] == '\\' {
+                let c = match lexeme[2] {
+                    '\\' => '\\',
+                    'n' => '\n',
+                    'r' => '\r',
+                    't' => '\t',
+                    '"' => '\"',
+                    _ => {
+                        self.error_at(&literal, ParseError::InvalidEscapeCharacter);
+                        '\\'
+                    },
+                };
+                TypedValue::Char(c)
+            } else {
+                TypedValue::Char(lexeme[1])
+            };
             return Expr::Literal { repr: literal, val, id };
         } else if self.try_consume(TokenType::OpenParen) {
             let expr = self.expression(true);

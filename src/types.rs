@@ -11,9 +11,8 @@ use crate::{
     }, errors::macros::internal_error, lexing::{
         Token,
         TokenType
-    }, values::{
-        Function,
-        TypedValue
+    }, typed_values::{
+        TypedFunction, TypedNativeFunction, TypedValue
     }
 };
 
@@ -72,6 +71,17 @@ impl Display for ValueType {
     }
 }
 
+impl From<&TypedNativeFunction> for ValueType {
+    fn from(value: &TypedNativeFunction) -> Self {
+        let TypedNativeFunction { params, ret_type, .. } = value;
+        ValueType::Function(Box::new(FunctionType {
+            ret_type: ret_type.clone(),
+            params: params.to_vec().into_boxed_slice(),
+            native: true,
+        }))
+    }
+}
+
 impl ValueType {
     pub fn dummy(&self) -> TypedValue {
         // TODO document this
@@ -88,7 +98,7 @@ impl ValueType {
                 (t.dummy(), t.dummy())
             )),
             ValueType::Function(func) => {
-                let func = Function {
+                let func = TypedFunction {
                     name: String::new().into_boxed_str(),
                     params: func.params.clone(),
                     ret_type: func.ret_type.clone(),

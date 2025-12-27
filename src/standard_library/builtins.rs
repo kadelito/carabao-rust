@@ -1,4 +1,4 @@
-use crate::{standard_library::registry::macros::val_into, values::TypedValue};
+use crate::{standard_library::registry::macros::val_into, typed_values::TypedValue};
 
 pub fn print(args: &[TypedValue]) -> TypedValue {
     let typed = val_into!(&args[0] => Any);

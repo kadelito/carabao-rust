@@ -14,30 +14,15 @@ pub enum TypedValue {
     // PartialEq compares object values, though
     String(Rc<[u16]>),
     Range(Rc<(TypedValue, TypedValue)>),
-    Function(Rc<Function>),
-    NativeFunc(Rc<NativeFunction>),
+    Function(Rc<TypedFunction>),
+    NativeFunc(Rc<TypedNativeFunction>),
     List(Rc<RefCell<Vec<TypedValue>>>),
     // Class(Rc<RefCell<[Value]>>),
     None,
 }
 
-// TODO unions
-pub union RuntimeValue {
-    any: ManuallyDrop<Box<TypedValue>>,
-    // None
-    int: i64,
-    float: f64,
-    char: char,
-    bool: bool,
-    string: ManuallyDrop<Rc<[u16]>>,
-    range: ManuallyDrop<Rc<(TypedValue, TypedValue)>>,
-    function: ManuallyDrop<Rc<Function>>,
-    native_func: ManuallyDrop<Rc<NativeFunction>>,
-    list: ManuallyDrop<Rc<RefCell<Vec<TypedValue>>>>,
-}
-
 #[derive(PartialEq)]
-pub struct Function {
+pub struct TypedFunction {
     pub name: Box<str>,
     pub params: Box<[ValueType]>,
     pub ret_type: ValueType,
@@ -46,7 +31,7 @@ pub struct Function {
     pub lines: Box<[LineRLE]>
 }
 
-impl Function {
+impl TypedFunction {
     pub fn get_line(&self, index: usize) -> u32 {
         if index == 0 {
             return self.lines[0].line;
@@ -66,7 +51,7 @@ impl Function {
         }
     }
 }
-impl Debug for Function {
+impl Debug for TypedFunction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Self {
             name,
@@ -84,14 +69,14 @@ impl Debug for Function {
 }
 
 #[derive(PartialEq)]
-pub struct NativeFunction {
+pub struct TypedNativeFunction {
     pub name: &'static str,
     pub params: &'static [ValueType],
     pub ret_type: ValueType,
     pub func: fn(&[TypedValue]) ->  TypedValue,
 }
 
-impl Debug for NativeFunction {
+impl Debug for TypedNativeFunction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Self {
             name,
@@ -125,11 +110,11 @@ impl Display for TypedValue {
                 write!(f, "[{start}...{end}]")
             }
             TypedValue::Function(function) => {
-                let Function { name, ret_type, .. } = function.as_ref();
+                let TypedFunction { name, ret_type, .. } = function.as_ref();
                 write!(f, "<func {name}(): {ret_type}>")
             }
             TypedValue::NativeFunc(native) => {
-                let NativeFunction { name, ret_type, .. } = native.as_ref();
+                let TypedNativeFunction { name, ret_type, .. } = native.as_ref();
                 write!(f, "<func {name}(): {ret_type}>")
             }
             TypedValue::List(list) => {
@@ -160,8 +145,8 @@ impl From<&str> for TypedValue {
     }
 }
 
-impl From<NativeFunction> for TypedValue {
-    fn from(value: NativeFunction) -> Self {
+impl From<TypedNativeFunction> for TypedValue {
+    fn from(value: TypedNativeFunction) -> Self {
         Self::NativeFunc(Rc::new(value))
     }
 }
@@ -184,11 +169,11 @@ impl TypedValue {
             TypedValue::String(_) => ValueType::String,
             TypedValue::Range(_) => todo!(),
             TypedValue::Function(function) => {
-                let Function { params, ret_type, .. } = function.as_ref();
+                let TypedFunction { params, ret_type, .. } = function.as_ref();
                 ValueType::Function(FunctionType {ret_type: ret_type.clone(), params: params.clone(), native: false}.into())
             }
             TypedValue::NativeFunc(function) => {
-                let NativeFunction { params, ret_type, .. } = function.as_ref();
+                let TypedNativeFunction { params, ret_type, .. } = function.as_ref();
                 ValueType::Function(FunctionType {ret_type: ret_type.clone(), params: (*params).into(), native: true}.into())
             }
             TypedValue::List(list) => ValueType::List(Box::new(

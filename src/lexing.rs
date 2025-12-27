@@ -325,8 +325,7 @@ impl<'a> Lexer<'a> {
         } else {
             // Single-quote string
             while !self.at_end() && self.peek() != '"' && self.peek() != '\n' {
-                self.advance();
-                if self.peek() == '\\' {
+                if self.advance() == '\\' {
                     self.advance(); // skip escaped quote. or newline
                 }
             }
@@ -508,10 +507,18 @@ impl<'a> Lexer<'a> {
             // Char literal
             // TODO escape characters here too
             '\'' => {
-                self.advance(); // the char itself
+                let char = self.advance(); // the char itself
                 if self.try_consume('\'') {
                     self.make_token(TokenType::CharLiteral)
+                } else if char == '\\' {
+                    self.advance(); // escaped character
+                    if !self.try_consume('\'') {
+                        self.error_token(TokenizationError::UnterminatedChar)
+                    } else {
+                        self.make_token(TokenType::CharLiteral)
+                    }
                 } else {
+                    println!("'");
                     self.error_token(TokenizationError::UnterminatedChar)
                 }
             }

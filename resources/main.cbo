@@ -1,13 +1,13 @@
-func overload(int x) {
-    println(x + ", the integer")
+func overload(int x, int num) {
+    println(x + ", the integer #" + num)
 }
 
-overload(10) // 10, the integer
+overload(10, 1) // 10, the integer #1
 
-func overload(string str) {
-    println(str + ", the string")
+func overload(string str, int num) {
+    println('\"' + str + "\", the string #" + num)
 }
 
-overload("10") // 10, the string
-"method".overload() // 10, the string
-overload(10) // 10, the integer (should call the first 'overload')
+overload("10", 2) // 10, the string #2
+"method".overload(3) // 10, the string #3
+overload(10, 4) // 10, the integer #4 (should call the first 'overload')

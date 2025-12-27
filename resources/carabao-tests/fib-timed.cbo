@@ -1,3 +1,17 @@
+func main() {
+    new FIB_N = 25
+    new TEST_COUNT = 5
+
+    new total_sec = 0.0
+    new n_tests = 0
+    while n_tests < 5 {
+        total_sec = total_sec + test_fib(FIB_N, n_tests == 0)
+        n_tests = n_tests + 1
+    }
+    print("Average time: (over " + n_tests + " tests) ")
+    println(total_sec / n_tests + "s")
+}
+
 func fib(int n): int {
     if n <= 1: return n
     return fib(n - 2) + fib(n - 1)
@@ -18,15 +32,4 @@ func test_fib(int n, bool print_num): float {
     return elapsed
 }
 
-
-new FIB_N = 25
-new TEST_COUNT = 5
-
-new total_sec = 0.0
-new n_tests = 0
-while n_tests < 5 {
-    total_sec = total_sec + test_fib(FIB_N, n_tests == 0)
-    n_tests = n_tests + 1
-}
-print("Average time: (over " + n_tests + " tests) ")
-println(total_sec / n_tests + "s")
+main()
