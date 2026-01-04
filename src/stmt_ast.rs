@@ -21,6 +21,7 @@ impl<'me, 'vis> Stmt where 'me: 'vis {
         Self::Block { statements: Vec::new() }
     }
 
+    //       spongebob me boy
     pub fn accept<T>(&'me self, visitor: &mut impl StmtVisitor<'vis, T>) -> T {
         match self {
             Self::Function { ret_type, name, params, body, id } =>

@@ -4,7 +4,6 @@ use crate::typed_values::*;
 
 #[derive(Debug)]
 pub enum Expr {
-    // TODO the commented-out ones
     Conditional { condition: Box<Expr>, if_true: Box<Expr>, if_false: Box<Expr>, id: usize },
     Boolean { left: Box<Expr>, op: Token, right: Box<Expr>, id: usize },
     Binary { left: Box<Expr>, op: Token, right: Box<Expr>, id: usize },

@@ -565,7 +565,13 @@ pub struct Token {
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub struct TokenLocation {
-    line: u32
+    pub line: u32
+}
+
+impl TokenLocation {
+    pub fn is_before(&self, other: &Self) -> bool {
+        self.line < other.line
+    }
 }
 
 impl Debug for Token {

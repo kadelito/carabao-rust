@@ -1,6 +1,6 @@
 use std::{any::Any, cell::RefCell, collections::{HashMap, HashSet}, fmt::{Debug, Display, Write, write}, mem::ManuallyDrop, rc::Rc, u32};
 
-use crate::{codegen::LineRLE, lexing::{Token, TokenType}};
+use crate::{codegen::LineRLE, lexing::{Token, TokenType}, runtime::RuntimeError};
 use crate::types::*;
 
 #[derive(Debug, PartialEq, Clone)]
@@ -73,7 +73,9 @@ pub struct TypedNativeFunction {
     pub name: &'static str,
     pub params: &'static [ValueType],
     pub ret_type: ValueType,
-    pub func: fn(&[TypedValue]) ->  TypedValue,
+    pub func: fn(&[TypedValue]) -> TypedValue,
+    // TODO replace native with result
+    // pub func: fn(&[TypedValue]) -> Result<TypedValue, RuntimeError>,
 }
 
 impl Debug for TypedNativeFunction {

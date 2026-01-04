@@ -1,11 +1,9 @@
 use std::{cell::RefCell, rc::Rc};
 
 use crate::{typed_values::TypedValue};
+use crate::standard_library::registry::macros::val_into;
 
 pub mod ranges {
-
-    use crate::standard_library::registry::macros::val_into;
-
     use super::*;
 
     pub fn new_range(args: &[TypedValue]) -> TypedValue {
@@ -26,8 +24,6 @@ pub mod ranges {
 }
 
 pub mod lists {
-    use crate::standard_library::registry::macros::val_into;
-
     use super::*;
 
     pub fn new_list(args: &[TypedValue]) -> TypedValue {
@@ -60,5 +56,65 @@ pub mod lists {
 
         let sliced = Rc::new(RefCell::new(list[start..end].to_vec())); // idk what actually happens :3
         TypedValue::List(sliced)
+    }
+
+    pub fn index_get(args: &[TypedValue]) -> TypedValue {
+        let list = val_into!(&args[0] => List);
+        let index = *val_into!(&args[1] => Int);
+        list.borrow()[index as usize].clone()
+    }
+
+    pub fn index_set(args: &[TypedValue]) -> TypedValue {
+        let list = val_into!(&args[1] => List);
+        let index = *val_into!(&args[2] => Int);
+        // double clone is unfortunate but whatever
+        list.borrow_mut()[index as usize] = args[0].clone();
+        args[0].clone()
+    }
+}
+
+pub mod strings {
+    use std::io::Write;
+
+    use super::*;
+
+    pub fn to_string(args: &[TypedValue]) -> TypedValue {
+        let mut buf = Vec::new();
+        write!(buf, "{}", args[0]).expect("writing to buffer should not fail??");
+        let str = String::from_utf8(buf)
+            .expect("i dont know how utf-8 works");
+        TypedValue::from(str)
+    }
+
+    pub fn len(args: &[TypedValue]) -> TypedValue {
+        let TypedValue::String(s) = &args[0] else { panic!() };
+        TypedValue::Int(s.len() as i64)
+    }
+
+    pub fn concat(args: &[TypedValue]) -> TypedValue {
+        let s1 = val_into!(&args[0] => String).clone();
+        let s2 = val_into!(&args[1] => String).clone();
+        TypedValue::String([s1, s2].concat().into_boxed_slice().into())
+    }
+
+    pub fn slice(args: &[TypedValue]) -> TypedValue {
+        let str = val_into!(&args[0] => String);
+        let (start, end) = {
+            let range = val_into!(&args[1] => Range);
+            let (start_val, end_val) = range.as_ref();
+            (*val_into!(start_val => Int) as usize,
+            *val_into!(end_val => Int) as usize)
+        };
+        let sliced = (&str[start..end]).into(); // idk what actually happens :3
+        TypedValue::String(sliced)
+    }
+
+    pub fn index(args: &[TypedValue]) -> TypedValue {
+        let utf16_char = {
+            let str = val_into!(&args[0] => String);
+            let index = *val_into!(&args[1] => Int);
+            str[index as usize]
+        };
+        TypedValue::Char(unsafe { char::from_u32_unchecked(utf16_char as u32) })
     }
 }

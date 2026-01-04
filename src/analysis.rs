@@ -5,8 +5,8 @@ use crate::expr_ast::*;
 use crate::lexing::{Token, TokenType};
 use crate::registry::GLOBAL_FUNCS;
 use crate::stmt_ast::{Stmt, StmtVisitor};
-use crate::types::*;
 use crate::typed_values::*;
+use crate::types::*;
 
 pub fn analyze(program: &Vec<Stmt>) -> Result<AnalysisResult, Vec<UsageError>> {
     let mut resolver = Resolver::new();
@@ -84,13 +84,13 @@ struct FunctionContext<'ast> {
     depth: usize,
     is_global: bool,
     loop_depth: usize,
-    function_backlog: HashMap<String, TempFunction<'ast>>,
+    function_backlog: HashMap<String, Vec<Option<TempFunction<'ast>>>>,
 }
 
 impl FunctionContext<'_> {
-    pub fn new(is_global: bool) -> Self {
+    pub fn new(is_global: bool, ret_type: ValueType) -> Self {
         Self {
-            ret_type: ValueType::None,
+            ret_type,
             value_count: 0,
             local_bindings: Vec::new(),
             depth: 0,
@@ -123,7 +123,7 @@ struct Resolver<'ast> {
 impl Resolver<'_> {
     fn new() -> Self {
         Self {
-            context: FunctionContext::new(true),
+            context: FunctionContext::new(true, ValueType::None),
             global_bindings: Vec::new(),
             errors: Vec::new(),
             final_data: AnalysisResult::new(),
@@ -147,8 +147,12 @@ impl<'ast> Resolver<'ast> {
         // We assume the global state they use is at the end of execution
         // (aka after all global declarations & redeclarations)
         for unfinished in std::mem::replace(&mut self.context.function_backlog, HashMap::new()) {
-            let (_, func) = unfinished;
-            self.finish_function(func);
+            let (_, funcs) = unfinished;
+            for overload in funcs {
+                if let Some(func) = overload {
+                    self.finish_function(func);
+                }
+            }
         }
         if !self.errors.is_empty() {
             Err(std::mem::replace(&mut self.errors, Vec::new()))
@@ -305,13 +309,6 @@ impl<'ast> Resolver<'ast> {
         valid
     }
 
-    fn finish_function_by_name(&mut self, name: &String) {
-        if let Some(func) = self.context.function_backlog.remove(name) {
-            self.finish_function(func);
-        };
-        // Do nothing, assume the function has already been resolved at a previous call
-    }
-
     fn finish_function(&mut self, func: TempFunction<'ast>) {
         let TempFunction {
             name,
@@ -319,7 +316,7 @@ impl<'ast> Resolver<'ast> {
             params,
             body,
         } = func;
-        let inner = FunctionContext::new(false);
+        let inner = FunctionContext::new(false, ret_type.clone());
 
         let old = std::mem::replace(&mut self.context, inner);
 
@@ -330,17 +327,23 @@ impl<'ast> Resolver<'ast> {
         for stmt in body {
             self.resolve_stmt(stmt);
         }
+        // TODO ensure a valid type is returned in every control flow path
 
         self.context = old;
     }
 
     // Resolves an identifier being called.
-    fn resolve_ident_call(&mut self, identifier: &Token, callee_id: usize, args: &[&Expr]) -> ValueType {
-
-        // do this first bc `definitions` borrows from self as well        
-        let args = args.into_iter()
-            .map(|arg| (*arg, self.resolve_expr(arg)))
-            .collect::<Box<[(&Expr, ValueType)]>>();
+    fn resolve_ident_call(
+        &mut self,
+        identifier: &Token,
+        callee_id: usize,
+        args: &[&Expr],
+    ) -> ValueType {
+        // do this first bc `definitions` borrows from self as well
+        let arg_types = args
+            .into_iter()
+            .map(|arg| self.resolve_expr(arg))
+            .collect::<Box<[ValueType]>>();
 
         let mut definitions = self.get_all_identifiers(identifier.lexeme().unwrap());
         if definitions.is_empty() {
@@ -352,34 +355,40 @@ impl<'ast> Resolver<'ast> {
             // No functions after filtering
             return self.error_at_token(identifier, UsageError::CantCallThat);
         }
-        
+
         // Try to match the correct function (chronologically descending)
+        let mut correct_index = 0;
         let mut correct_overload = None;
 
         // Check for exact type matches
-        'next_func: for (binding, data) in definitions.iter().rev() {
+        for (binding, data) in definitions.iter().rev() {
             let ValueType::Function(func) = &data.val_type else {
                 internal_error!("");
             };
 
-            for (param_type, (_, arg_type)) in func.params.iter().zip(args.iter()) {
-                if param_type != arg_type {
-                    continue 'next_func;
-                }
+            if func.params == arg_types {
+                correct_overload = Some((binding.clone(), func.clone()));
+                break;
             }
-            correct_overload = Some((binding.clone(), func.clone()));
-            break;
+            correct_index += 1;
         }
 
         if correct_overload.is_none() {
             // Search allowing coercions
+            correct_index = 0;
             'next_func: for (binding, data) in definitions.iter().rev() {
                 let ValueType::Function(func) = &data.val_type else {
                     internal_error!("");
                 };
 
-                for (param_type, (_, arg_type)) in func.params.iter().zip(args.iter()) {
+                if func.params.len() != arg_types.len() {
+                    correct_index += 1;
+                    continue 'next_func;
+                }
+
+                for (param_type, arg_type) in func.params.iter().zip(arg_types.iter()) {
                     if !ValueType::can_convert_type(param_type, arg_type) {
+                        correct_index += 1;
                         continue 'next_func;
                     }
                 }
@@ -389,8 +398,21 @@ impl<'ast> Resolver<'ast> {
         }
 
         if let Some((correct_binding, func_type)) = correct_overload {
+            // resolve the function according to the index
+            // (the order of functions in the backlog matches the order of definitions)
+            if let Some(funcs) = self
+                .context
+                .function_backlog
+                .get_mut(identifier.lexeme().unwrap())
+                && let Some(func) = funcs[correct_index].take()
+            {
+                self.finish_function(func);
+            }
+            // we know the return type now
             let ret = func_type.ret_type.clone();
-            self.final_data.expr_types.insert(callee_id, ValueType::Function(func_type));
+            self.final_data
+                .expr_types
+                .insert(callee_id, ValueType::Function(func_type));
             self.final_data.bindings.insert(callee_id, correct_binding);
             ret
         } else {
@@ -406,8 +428,7 @@ impl<'ast> Resolver<'ast> {
 
 impl<'ast> StmtVisitor<'ast, ()> for Resolver<'ast> {
     fn visit_summon_stmt(&mut self, _path: &Vec<Token>, _alias: &Option<Token>, _id: usize) {
-        /*TODO*/
-        todo!("summons")
+        todo!() // summons
     }
 
     fn visit_var_stmt(
@@ -556,32 +577,27 @@ impl<'ast> StmtVisitor<'ast, ()> for Resolver<'ast> {
     ) {
         self.update_loc(name);
 
-        let temp_name = name.copy_ident();
+        let var_name = name.copy_ident();
         let new_function_type = ValueType::func_type(ret_type, params);
 
         if self.in_global_scope() {
-            self.declare_global(temp_name, new_function_type);
+            self.declare_global(var_name, new_function_type);
         } else {
-            self.declare_local(temp_name, new_function_type)
+            self.declare_local(var_name, new_function_type)
         }
 
         // Wait for resolving until first call
         // No forward declarations in this household
-        // self.context.function_backlog.insert(
-        //     name.copy_ident(),
-        //     TempFunction {
-        //         name: name.lexeme().unwrap(),
-        //         ret_type,
-        //         params,
-        //         body,
-        //     },
-        // );
-        self.finish_function(TempFunction {
+        let temp = TempFunction {
             name: name.lexeme().unwrap(),
             ret_type,
             params,
             body,
-        });
+        };
+
+        let entry = self.context.function_backlog.entry(name.copy_ident());
+        let value = entry.or_insert(Vec::new());
+        value.push(Some(temp));
     }
 }
 
@@ -616,7 +632,8 @@ impl<'ast> ExprVisitor<'_, ValueType> for Resolver<'ast> {
         let left = self.resolve_expr(left);
         let right = self.resolve_expr(right);
         // TODO check overloaded
-        let Some(both) = ValueType::coerce_binary(&left, op.kind() == TokenType::Plus, &right) else {
+        let Some(both) = ValueType::coerce_binary(&left, op.kind() == TokenType::Plus, &right)
+        else {
             return self.error_at_token(op, UsageError::IncompatibleTypes);
         };
         self.final_data.bin_types.insert(id, both.clone());
@@ -634,10 +651,9 @@ impl<'ast> ExprVisitor<'_, ValueType> for Resolver<'ast> {
         }
         // after this point, both are the same type
         match both {
-            ValueType::Any =>
-            /*TODO*/
-            {
-                todo!("any in binary operators")
+            ValueType::Any => {
+                // TODO any in binary operators
+                todo!()
             }
             ValueType::Int => match op.kind() {
                 TokenType::Plus
@@ -694,10 +710,8 @@ impl<'ast> ExprVisitor<'_, ValueType> for Resolver<'ast> {
                 | TokenType::LessEqual => ValueType::Bool,
                 _ => self.error_at_token(op, UsageError::InvalidOperator),
             },
-            ValueType::Object { .. } =>
-            /*TODO*/
-            {
-                todo!("Operator overloading?")
+            ValueType::Object { .. } => {
+                todo!() // Operator overloading?
             }
             ValueType::Range(value_type) => todo!("adding numeric ranges?"),
             ValueType::Function { .. } => panic!(),
@@ -735,8 +749,7 @@ impl<'ast> ExprVisitor<'_, ValueType> for Resolver<'ast> {
                 }
             }
             Expr::Get { obj, property, .. } => {
-                /*TODO*/
-                todo!()
+                todo!() // TODO set exprs
             }
             Expr::Slice {
                 sequence, query, ..
@@ -747,9 +760,6 @@ impl<'ast> ExprVisitor<'_, ValueType> for Resolver<'ast> {
                     // TODO Overload slicing for objects?
                     // maybe (a: int)[b: int] to apply bitmask?
                     // (a & (1 << b) == 1)
-                    ValueType::String => ValueType::Char,
-                    // TODO string slice assignment?
-                    // str1[a..b] = str2 => str1[0..a] + str2 + str1[b..str1.len]
                     ValueType::List(item_type) => {
                         self.expect_resolved_type(&item_type, value, &val_type);
                         *item_type
@@ -827,33 +837,60 @@ impl<'ast> ExprVisitor<'_, ValueType> for Resolver<'ast> {
             Expr::Variable { identifier, id } => {
                 self.update_loc(identifier);
                 self.resolve_ident_call(identifier, *id, args.as_slice())
-            },
-            Expr::Get { obj, property, id } => {        
+            }
+            Expr::Get { obj, property, id } => {
                 self.update_loc(property);
-                
+
                 if args.len() + 1 >= u8::MAX.into() {
                     // im not doing CallWide, nobody needs >= 256 arguments
                     self.error_at_expr(args.last().unwrap(), UsageError::TooManyArgs);
                 }
 
                 // Pretend the object is the first argument
-                let mut actual_args = vec![obj.as_ref()];
-                actual_args.extend(args.iter());
+                let actual_args = {
+                    let mut new_args = vec![obj.as_ref()];
+                    new_args.extend(args.iter());
+                    new_args
+                };
 
                 // resolve it as property(obj, args...)
                 self.resolve_ident_call(property, *id, actual_args.as_slice())
             }
             other => {
-                self.resolve_expr(other);
-                self.error_at_expr(callee, UsageError::CantCallThat)
-            },
+                match self.resolve_expr(other) {
+                    ValueType::Unchecked => ValueType::Unchecked,
+                    ValueType::Any => todo!(),
+                    ValueType::None
+                    | ValueType::Int
+                    | ValueType::Float
+                    | ValueType::Char
+                    | ValueType::Bool
+                    | ValueType::String
+                    | ValueType::Range(_)
+                    | ValueType::List(_) => self.error_at_expr(callee, UsageError::CantCallThat),
+                    ValueType::Function(func_type) => {
+                        // some other expression that evaluated to a function
+                        // literal/lambda?
+                        let FunctionType {
+                            ret_type, params, ..
+                        } = *func_type;
+                        if args.len() != params.len() {
+                            self.error_at_expr(callee, UsageError::ParamMismatch);
+                        } else {
+                            for (param, arg) in params.iter().zip(args.iter()) {
+                                self.expect_type(param, arg);
+                            }
+                        }
+                        ret_type
+                    }
+                    ValueType::Object(obj_type) => todo!("Overload calling?"),
+                }
+            }
         }
     }
 
     fn visit_variable_expr(&mut self, identifier: &Token, id: usize) -> ValueType {
         self.update_loc(identifier);
-
-        // TODO handle referencing an overload set individually
 
         match self.get_identifier(identifier.lexeme().unwrap()) {
             Some((binding, data)) => {
@@ -901,17 +938,21 @@ impl<'ast> ExprVisitor<'_, ValueType> for Resolver<'ast> {
         return match (seq_type, query_type) {
             (ValueType::String, ValueType::Int) => ValueType::Char,
             (ValueType::List(item_type), ValueType::Int) => *item_type,
-            (ValueType::String, ValueType::Range(bound_type)) => if *bound_type == ValueType::Int {
-                ValueType::String
-            } else {
-                self.error_at_expr(query, UsageError::InvalidSlice)
+            (ValueType::String, ValueType::Range(bound_type)) => {
+                if *bound_type == ValueType::Int {
+                    ValueType::String
+                } else {
+                    self.error_at_expr(query, UsageError::InvalidSlice)
+                }
             }
-            (ValueType::List(item_type), ValueType::Range(bound_type)) => if *bound_type == ValueType::Int {
-                ValueType::List(item_type)
-            } else {
-                self.error_at_expr(query, UsageError::InvalidSlice)
+            (ValueType::List(item_type), ValueType::Range(bound_type)) => {
+                if *bound_type == ValueType::Int {
+                    ValueType::List(item_type)
+                } else {
+                    self.error_at_expr(query, UsageError::InvalidSlice)
+                }
             }
-            _ => self.error_at_expr(sequence, UsageError::CantIndexThat)
+            _ => self.error_at_expr(sequence, UsageError::CantIndexThat),
         };
     }
 

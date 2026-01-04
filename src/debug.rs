@@ -44,9 +44,6 @@ pub mod opcodes {
                 | OpCode::Pop
                 | OpCode::Return
                 | OpCode::Crash
-                | OpCode::IndexGet
-                | OpCode::IndexSet
-                | OpCode::StrIndex
 
                 | OpCode::IntToFloat
                 | OpCode::BoolToFloat

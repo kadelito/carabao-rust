@@ -1,7 +1,6 @@
 use std::{collections::HashMap, ops::IndexMut};
 
 use crate::{
-    debug::expr_to_str,
     expr_ast::*,
     lexing::*,
     stmt_ast::Stmt,

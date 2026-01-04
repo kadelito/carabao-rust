@@ -35,9 +35,6 @@ pub enum OpCode {
     JumpIfNot, // [ip offset][byte 2]
     CallUser,      // # of arguments to parse
     CallNative,
-    IndexGet,
-    IndexSet,
-    StrIndex,
 
     // ========== Casts ==========
     IntToFloat,
@@ -731,14 +728,9 @@ impl ExprVisitor<'_, ()> for Generator {
                 self.code_binary(&both, left, right, $opcode)
             };
         }
-
         macro_rules! write_binary_call {
             ($func_name: expr) => {
-                self.write_native($func_name);
-                self.code_expr_with_cast(&both, left);
-                self.code_expr_with_cast(&both, right);
-                self.write_instr(OpCode::CallNative);
-                self.write_byte(2);
+                self.implicit_native_call($func_name, &[left, right]);
             };
         }
 
@@ -750,7 +742,7 @@ impl ExprVisitor<'_, ()> for Generator {
             }
             TokenType::BangEqual => {
                 write_binary!(OpCode::ValEqual);
-                write_binary!(OpCode::BoolNot);
+                self.write_instr(OpCode::BoolNot);
                 return;
             }
             TokenType::DoubleDot => {
@@ -830,24 +822,32 @@ impl ExprVisitor<'_, ()> for Generator {
 
     fn visit_assign_expr(&mut self, assignee: &Box<Expr>, value: &Box<Expr>, id: usize) -> () {
         let final_type = self.get_type_from_id(id).clone();
-        self.code_expr_with_cast(&final_type, value);
         match &**assignee {
             Expr::Slice {
                 sequence, query, ..
             } => {
-                self.code_expr_as_is(sequence);
-                self.code_expr_as_is(query);
                 // stack atp: [...value, sequence, query]
                 match self.get_expr_type(sequence) {
-                    ValueType::List(_) => self.write_instr(OpCode::IndexSet),
+                    ValueType::List(_) => {
+                        self.write_native("list_index_set");
+                    },
                     _ => internal_error!("Invalid slicee made it to codegen"),
                 }
+                self.code_expr_with_cast(&final_type, value);
+                self.code_expr_as_is(sequence);
+                self.code_expr_as_is(query);
+
+                self.write_instr(OpCode::CallNative);
+                self.write_byte(3);
             }
-            Expr::Get { obj, id, .. } => {
+            Expr::Get { obj, property, id } => {
+                self.code_expr_with_cast(&final_type, value);
                 self.code_expr_as_is(obj);
                 todo!()
             }
             Expr::Variable { .. } => {
+                self.code_expr_with_cast(&final_type, value);
+
                 // use id of outermost assign, not the assignee
                 let loc = self
                     .bindings
@@ -1042,11 +1042,27 @@ impl ExprVisitor<'_, ()> for Generator {
     ) -> () {
         let seq_type = self.get_expr_type(sequence).clone();
         let query_type = self.get_expr_type(query).clone();
-        self.code_expr_as_is(sequence);
-        self.code_expr_as_is(query);
         match (seq_type, query_type) {
-            (ValueType::String, ValueType::Int) => self.write_instr(OpCode::StrIndex),
-            (ValueType::List(_), ValueType::Int) => self.write_instr(OpCode::IndexGet),
+            (ValueType::String, ValueType::Int) => {
+                self.implicit_native_call("str_index_get", &[sequence, query]);
+            }
+            (ValueType::List(_), ValueType::Int) => {
+                self.implicit_native_call("list_index_get", &[sequence, query]);
+            }
+            (ValueType::String, ValueType::Range(range)) => {
+                if *range != ValueType::Int {
+                    internal_error!("Invalid slice query made it to codegen")
+                }
+                self.implicit_native_call("str_slice", &[sequence, query]);
+
+            }
+            (ValueType::List(_), ValueType::Range(range)) => {
+                if *range != ValueType::Int {
+                    internal_error!("Invalid slice query made it to codegen")
+                }
+                self.implicit_native_call("list_slice", &[sequence, query]);
+
+            }
             _ => internal_error!("Unsliceable type made it to codegen"),
         }
     }

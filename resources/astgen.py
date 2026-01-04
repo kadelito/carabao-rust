@@ -2,6 +2,7 @@
 Assign      = assignee: Expr | op: Token | value: Expr // op for +=, *=, etc
 """
 exprs = """
+Object      = fields: Vec<(Token, Expr)>
 Conditional = condition: Expr | if_true: Expr | if_false: Expr
 Boolean     = left: Expr  | op: Token | right: Expr
 Binary      = left: Expr  | op: Token | right: Expr
@@ -13,7 +14,7 @@ Call        = callee: Expr | args: Vec<Expr>
 Get         = obj: Expr | property: Token
 List        = items: Vec<Expr>
 Variable    = identifier: Token
-Literal     = repr: Token | val: Value
+Literal     = repr: Token | val: TypedValue
 """.strip()
 """
 Try         = try_block: Stmt | exception: Identifier | alias: Identifier | catch_block: Stmt
@@ -21,6 +22,7 @@ Switch      = value: Expr | branches: Vec<(Expr, Stmt)>
 """
 # TODO switch statements are hard.. start with matching `any`?
 stmts = """
+Class       = name: Token | 
 Function    = ret_type: ValueType | name: Token | params: Vec<(Token, ValueType)> | body: Vec<Stmt>
 Summon      = path: Vec<Token> | alias: Option<Token> | id: usize
 Var         = name: Token | var_type: Option<ValueType> | val: Option<Box<Expr>>

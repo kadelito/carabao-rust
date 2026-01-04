@@ -20,7 +20,6 @@ const VM_CALLS_CAPACITY: usize = 256;
 // TODO make these fit with unions also
 macro_rules! vm_pop_val {
     ($vm: expr, $variant: ident) => {
-        // TODO replace with extracting a specific type
         if let TypedValue::$variant(v) = vm_stack_pop!($vm) { v }
         else {
             panic!("{} not on top of stack:\n{:?}", stringify!($variant), $vm.stack)
@@ -300,29 +299,6 @@ impl VM {
                 self.stack.push(TypedValue::None);
                 return Ok(SuccessStatus::ReturnTop(value));
             }
-            OpCode::IndexGet => {
-                let index = pop_val!(Int) as usize;
-                let list = pop_val!(List);
-                let at_index = list.borrow()[index].clone();
-                self.stack.push(at_index);
-            }
-            OpCode::IndexSet => {
-                // as usual, no popping the actual value bc set is an expression
-                let index = pop_val!(Int) as usize;
-                let list = pop_val!(List);
-                let new_value = self.stack_peek(0); // cloned here
-                list.borrow_mut()[index] = new_value;
-            }
-            OpCode::StrIndex => {
-                let index = pop_val!(Int) as usize;
-                let string = pop_val!(String);
-                self.stack.push(
-                    TypedValue::Char(
-                        char::from_u32(string[index] as u32)
-                        .expect("u16s should be valid chars")
-                    )
-                );
-            },
             OpCode::AnyToInt => unwrap_any!(Int),
             OpCode::AnyToFloat => unwrap_any!(Float),
             OpCode::AnyToBool => unwrap_any!(Bool),

@@ -1,13 +1,18 @@
-func overload(int x, int num) {
-    println(x + ", the integer #" + num)
+func expect(int expected, int actual) {
+    print(actual)
+    if actual != expected
+        print(" (failure)")
+    println("")
 }
-
-overload(10, 1) // 10, the integer #1
-
-func overload(string str, int num) {
-    println('\"' + str + "\", the string #" + num)
+new x = 1
+{
+    new x = 2
+    {
+        new x = 3
+        expect(3, x)
+        new x = 4
+        expect(4, x)
+    }
+    expect(2, x)
 }
-
-overload("10", 2) // 10, the string #2
-"method".overload(3) // 10, the string #3
-overload(10, 4) // 10, the integer #4 (should call the first 'overload')
+expect(1, x)

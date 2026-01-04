@@ -42,7 +42,9 @@ pub struct FunctionType {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct ObjectType {
-    // TODO
+    name: Option<String>,
+    fields: Box<[(String, ValueType)]>,
+    // TODO ObjectType
 }
 
 impl Display for ValueType {
@@ -84,7 +86,7 @@ impl From<&TypedNativeFunction> for ValueType {
 
 impl ValueType {
     pub fn dummy(&self) -> TypedValue {
-        // TODO document this
+        // TODO dummy documentation
         match self {
             ValueType::Unchecked => TypedValue::None,
             ValueType::None => TypedValue::None,

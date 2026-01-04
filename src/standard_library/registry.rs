@@ -10,7 +10,9 @@ pub mod macros {
 
     macro_rules! val_into {
         ($val: expr => $variant: ident) => {{
-            let TypedValue::$variant(val) = $val else { crate::errors::macros::internal_error!("Value was not {}", stringify!($variant)) };
+            let TypedValue::$variant(val) = $val else {
+                crate::errors::macros::internal_error!("Value was not {}", stringify!($variant))
+            };
             val
         }};
     }
@@ -43,29 +45,35 @@ macro_rules! native_func {
 /// An array of functions and their identifiers, accessible in Carabao code.
 /// 
 /// Blank identifiers correspond to functions that can only be called implicitly.
-pub const GLOBAL_FUNCS: LazyCell<[(&'static str, TypedValue); 14]> = LazyCell::new(|| [
-    // native functions available to the user in global scope
-    // the string arg refers to the identfier & internal name
-    native_func!("print",   builtins::print    as func(Any): None),
-    native_func!("println", builtins::println  as func(Any): None),
-    native_func!("clock",   builtins::clock    as func(   ): Int),
-    native_func!("str",     strings::to_string as func(Any): String), // str(val) or val.str()
+pub const GLOBAL_FUNCS: LazyCell<[(&'static str, TypedValue); 17]> = LazyCell::new(|| {
+    [
+        // native functions available to the user in global scope
+        // the string arg refers to the identfier & internal name
+        native_func!("print",   builtins::print as func(Any): None),
+        native_func!("println", builtins::println  as func(Any): None),
+        native_func!("clock",   builtins::clock as func(): Int),
+        native_func!("str",     iterables::strings::to_string as func(Any): String), // str(val) or val.str()
 
-    // internal, type-unchecked functions
-    // the string is the internal name, not identifier
-    native_func!("str_len", strings::len),
-    native_func!("str_concat", strings::concat),
-    native_func!("str_slice", strings::slice),
+        // internal, type-unchecked functions
+        // the string is the internal name, not identifier
+        native_func!("str_len",    iterables::strings::len),
+        native_func!("str_concat", iterables::strings::concat),
+        native_func!("str_slice",  iterables::strings::slice),
+        native_func!("str_index_get",  iterables::strings::index),
 
-    native_func!("list_len", iterables::lists::len),
-    native_func!("list_concat", iterables::lists::concat),
-    native_func!("list_slice", iterables::lists::slice),
-    native_func!("new_list", iterables::lists::new_list),
+        native_func!("list_len",       iterables::lists::len),
+        native_func!("list_concat",    iterables::lists::concat),
+        native_func!("list_slice",     iterables::lists::slice),
+        native_func!("list_index_get", iterables::lists::index_get),
+        native_func!("list_index_set", iterables::lists::index_set),
+        native_func!("new_list",       iterables::lists::new_list),
 
-    native_func!("new_range", iterables::ranges::new_range),
-    native_func!("range_start", iterables::ranges::range_get_start),
-    native_func!("range_end", iterables::ranges::range_get_end),
-]);
+        // TODO replace ranges with structs
+        native_func!("new_range", iterables::ranges::new_range),
+        native_func!("range_start", iterables::ranges::range_get_start),
+        native_func!("range_end", iterables::ranges::range_get_end),
+    ]
+});
 
 /// Maps static string slices to indices to the global funcs list.
 /// 
