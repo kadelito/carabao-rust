@@ -1,18 +1,20 @@
 use std::collections::HashMap;
 
-use crate::errors::macros::internal_error;
-use crate::expr_ast::*;
-use crate::lexing::{Token, TokenType};
-use crate::registry::GLOBAL_FUNCS;
-use crate::stmt_ast::{Stmt, StmtVisitor};
-use crate::typed_values::*;
-use crate::types::*;
+use crate::{
+    errors::macros::internal_error,
+    expr_ast::*,
+    lexing::{Token, TokenType},
+    registry::GLOBAL_FUNCS,
+    stmt_ast::{Stmt, StmtVisitor},
+    typed_values::*,
+    types::*,
+};
 
 pub fn analyze(program: &Vec<Stmt>) -> Result<AnalysisResult, Vec<UsageError>> {
     let mut resolver = Resolver::new();
 
     for (name, obj) in GLOBAL_FUNCS.iter() {
-        resolver.declare_global(
+        resolver.declare(
             (*name).to_owned(),
             if name.is_empty() {
                 // these will never appear in user code, just here to preserve spacing
@@ -179,13 +181,16 @@ impl<'ast> Resolver<'ast> {
         use Binding::*;
 
         // Look in locals first
+        let globals_offset = if self.context.is_global {
+            // The main script needs to account for globals in the stack
+            // (not stored in context.local_bindings)
+            self.global_bindings.len()
+        } else { 0 };
         for (slot, data) in self.context.local_bindings.iter().enumerate().rev() {
             if data.name == *ident {
-                return Some((Stack(slot), data));
+                return Some((Stack(slot + globals_offset), data));
             }
         }
-
-        // TODO class fields?
 
         // Look in globals next
         for (slot, data) in self.global_bindings.iter().enumerate().rev() {
@@ -221,20 +226,20 @@ impl<'ast> Resolver<'ast> {
         declarations
     }
 
-    fn declare_global(&mut self, name: String, val_type: ValueType) {
-        self.global_bindings.push(VarData {
-            name,
-            val_type,
-            depth: 0,
-        });
-    }
-
-    fn declare_local(&mut self, name: String, val_type: ValueType) {
-        self.context.local_bindings.push(VarData {
-            name,
-            val_type,
-            depth: self.context.depth,
-        });
+    fn declare(&mut self, name: String, val_type: ValueType) {
+        if self.in_global_scope() {
+            self.global_bindings.push(VarData {
+                name,
+                val_type,
+                depth: 0,
+            });
+        } else {
+            self.context.local_bindings.push(VarData {
+                name,
+                val_type,
+                depth: self.context.depth,
+            });
+        }
     }
 
     fn enter_scope(&mut self) {
@@ -320,9 +325,9 @@ impl<'ast> Resolver<'ast> {
 
         let old = std::mem::replace(&mut self.context, inner);
 
-        self.declare_local(name.to_owned(), ValueType::func_type(ret_type, params));
+        self.declare(name.to_owned(), ValueType::func_type(ret_type, params));
         for (name, pm_type) in params {
-            self.declare_local(name.copy_ident(), pm_type.clone());
+            self.declare(name.copy_ident(), pm_type.clone());
         }
         for stmt in body {
             self.resolve_stmt(stmt);
@@ -454,11 +459,7 @@ impl<'ast> StmtVisitor<'ast, ()> for Resolver<'ast> {
             }
         };
 
-        if self.in_global_scope() {
-            self.declare_global(name.copy_ident(), real_type);
-        } else {
-            self.declare_local(name.copy_ident(), real_type);
-        }
+        self.declare(name.copy_ident(), real_type);
     }
 
     fn visit_block_stmt(&mut self, statements: &'ast Vec<Stmt>) {
@@ -500,20 +501,20 @@ impl<'ast> StmtVisitor<'ast, ()> for Resolver<'ast> {
         self.enter_scope();
         let local_var_type = match self.resolve_expr(sequence) {
             ValueType::String => {
-                self.declare_local(String::new(), ValueType::Int);
+                self.declare(String::new(), ValueType::Int);
                 ValueType::Char
             }
             ValueType::List(value_type) => {
-                self.declare_local(String::new(), ValueType::Int);
+                self.declare(String::new(), ValueType::Int);
                 *value_type
             }
             ValueType::Range(t) => match *t {
-                ValueType::Int => ValueType::Int, // the variable itself
+                ValueType::Int => ValueType::Int,
                 _ => self.error_at_expr(sequence, UsageError::NotIterable),
             },
             _ => self.error_at_expr(sequence, UsageError::NotIterable),
         };
-        self.declare_local(loop_var.copy_ident(), local_var_type);
+        self.declare(loop_var.copy_ident(), local_var_type);
 
         self.context.loop_depth += 1;
         self.resolve_stmt(body);
@@ -580,11 +581,7 @@ impl<'ast> StmtVisitor<'ast, ()> for Resolver<'ast> {
         let var_name = name.copy_ident();
         let new_function_type = ValueType::func_type(ret_type, params);
 
-        if self.in_global_scope() {
-            self.declare_global(var_name, new_function_type);
-        } else {
-            self.declare_local(var_name, new_function_type)
-        }
+        self.declare(var_name, new_function_type);
 
         // Wait for resolving until first call
         // No forward declarations in this household
@@ -631,7 +628,7 @@ impl<'ast> ExprVisitor<'_, ValueType> for Resolver<'ast> {
 
         let left = self.resolve_expr(left);
         let right = self.resolve_expr(right);
-        // TODO check overloaded
+        // TODO check overloaded here specifically
         let Some(both) = ValueType::coerce_binary(&left, op.kind() == TokenType::Plus, &right)
         else {
             return self.error_at_token(op, UsageError::IncompatibleTypes);

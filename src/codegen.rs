@@ -11,8 +11,8 @@ use crate::{
     lexing::{Token, TokenType},
     registry::BUILTIN_FUNC_INDICES,
     stmt_ast::{Stmt, StmtVisitor},
-    types::*,
     typed_values::*,
+    types::*,
 };
 
 #[derive(Debug, TryFromPrimitive, IntoPrimitive)]
@@ -26,14 +26,13 @@ pub enum OpCode {
     Return,
     Constant, // [const pool index]
     LoadByte,
-    GetLocal,  // [stack index]
-    SetLocal,  // [stack index]
-    GetGlobal, // [globals index]
-    SetGlobal, // [globals index]
-    DefineGlobal,
+    GetLocal,  // [relative stack index]
+    SetLocal,  // [relative stack index]
+    GetGlobal, // [absolute stack index]
+    SetGlobal, // [absolute stack index]
     Jump,      // [ip offset][byte 2 of short]
     JumpIfNot, // [ip offset][byte 2]
-    CallUser,      // # of arguments to parse
+    CallUser,  // # of arguments to parse
     CallNative,
 
     // ========== Casts ==========
@@ -273,7 +272,7 @@ impl Generator {
     }
 
     fn write_native(&mut self, func_name: &str) {
-        // TODO replace with other function location
+        // TODO replace with some other function locating
         self.write_instr(OpCode::GetGlobal);
         self.write_byte(BUILTIN_FUNC_INDICES[func_name] as u8);
     }
@@ -420,7 +419,13 @@ impl Generator {
         }
     }
 
-    fn code_binary(&mut self, both_type: &ValueType, left: &Expr, right: &Expr, instruction: OpCode) {
+    fn code_binary(
+        &mut self,
+        both_type: &ValueType,
+        left: &Expr,
+        right: &Expr,
+        instruction: OpCode,
+    ) {
         self.code_expr_with_cast(both_type, left);
         self.code_expr_with_cast(both_type, right);
         self.write_instr(instruction);
@@ -476,9 +481,6 @@ impl StmtVisitor<'_, ()> for Generator {
         // Store new function in the heap and register
         // a pointer to it in the outer function's constants
         self.constant(TypedValue::Function(Rc::new(func)));
-        if self.in_global_scope() {
-            self.write_instr(OpCode::DefineGlobal);
-        }
         *self.context.var_counts.last_mut().unwrap() += 1;
     }
 
@@ -510,9 +512,6 @@ impl StmtVisitor<'_, ()> for Generator {
             (Some(var), Some(val)) => self.code_expr_with_cast(var, val),
         }
 
-        if self.in_global_scope() {
-            self.write_instr(OpCode::DefineGlobal);
-        }
         *self.context.var_counts.last_mut().unwrap() += 1;
     }
 
@@ -564,33 +563,50 @@ impl StmtVisitor<'_, ()> for Generator {
 
     fn visit_for_stmt(&mut self, var: &Token, sequence: &Box<Expr>, body: &Box<Stmt>) -> () {
         self.update_loc(var);
-        // TODO replace this with arbitrary integer ranges
-        // also strings & lists
 
-        /*TEMP*/
-        let Expr::Binary {
-            left, op, right, ..
-        } = sequence.as_ref()
-        else {
-            /*TEMP*/
-            internal_error!("Other for-loops not supported")
-            /*TEMP*/
-        };
-        /*TEMP*/
-        assert_eq!(op.kind(), TokenType::DoubleDot);
-        /*TEMP*/
-        assert_eq!(self.get_expr_type(left), &ValueType::Int);
-        /*TEMP*/
-        assert_eq!(self.get_expr_type(right), &ValueType::Int);
+        // "helpers" for writing the left and right bound
+        let mut code_lb: Box<dyn FnMut(&mut Self)>;
+        // code_seq exists to avoid potential recurring side-effects in the sequence (function call)
+        // so it gets special code over 'var'
+        let mut code_seq: Option<Box<dyn FnMut(&mut Self)>>;
+        let mut code_rb: Box<dyn FnMut(&mut Self, Box<dyn FnMut()>)>;
+
+        match self.get_expr_type(sequence) {
+            ValueType::Any => todo!(), // any in for loops???
+            ValueType::String => {
+                code_lb = Box::new(|_self| {
+                    _self.write_instr(OpCode::LoadByte);
+                    _self.write_byte(0);
+                });
+                code_rb = Box::new(|_self, mut seq| {
+                    _self.write_native("str_len");
+                    seq();
+                    _self.write_instr(OpCode::CallNative);
+                    _self.write_byte(1);
+                });
+            }
+            ValueType::List(_) => {
+                code_lb = Box::new(|_self| {
+                    _self.write_instr(OpCode::LoadByte);
+                    _self.write_byte(0);
+                });
+                code_rb = Box::new(|_self, mut seq| {
+                    _self.write_native("list_len");
+                    seq();
+                    _self.write_instr(OpCode::CallNative);
+                    _self.write_byte(1);
+                });
+            }
+            ValueType::Range(_) => todo!(),
+            ValueType::Object(_) => todo!(), // overload?
+            _ => internal_error!("Invalid sequence type in for-loop"),
+        }
 
         // initialization
         // index is 0 if in global scope bc variables go to global slots, not stack
-        let var_index = if self.in_global_scope() {
-            0
-        } else {
-            *self.context.var_counts.last().unwrap()
-        };
-        self.code_expr_as_is(left); // this is the variable
+        let var_index = *self.context.var_counts.last().unwrap();
+
+        code_lb(self); // this is the variable
         let first_loop_jump = self.write_jump(OpCode::Jump);
 
         // increment (i = i + 1)
@@ -608,7 +624,7 @@ impl StmtVisitor<'_, ()> for Generator {
         self.patch_jump_to_next(first_loop_jump);
         self.write_instr(OpCode::GetLocal);
         self.write_byte(var_index); // i
-        self.code_expr_as_is(right); // RB
+        code_rb(self, Box::new(|| {}));
         self.write_instr(OpCode::IntLess); // i < RB
         let end_jump = self.write_jump(OpCode::JumpIfNot);
 
@@ -667,7 +683,7 @@ impl StmtVisitor<'_, ()> for Generator {
                     let Expr::Literal { val, .. } = &**arg else {
                         internal_error!("'continue' arg should be a integer literal");
                     };
-                    let TypedValue::Int(i) = val else { 
+                    let TypedValue::Int(i) = val else {
                         internal_error!("'continue' arg should be a integer literal");
                     };
                     loops_to_jump = *i as usize;
@@ -715,7 +731,6 @@ impl ExprVisitor<'_, ()> for Generator {
         right: &Box<Expr>,
         id: usize,
     ) -> () {
-
         self.update_loc(op);
 
         let both = self
@@ -723,6 +738,7 @@ impl ExprVisitor<'_, ()> for Generator {
             .remove(&id)
             .expect("Should have resolved types in binary");
 
+        // helpers for ensuring order of writes is correct for binary ops AND function calls
         macro_rules! write_binary {
             ($opcode: expr) => {
                 self.code_binary(&both, left, right, $opcode)
@@ -730,7 +746,11 @@ impl ExprVisitor<'_, ()> for Generator {
         }
         macro_rules! write_binary_call {
             ($func_name: expr) => {
-                self.implicit_native_call($func_name, &[left, right]);
+                self.write_native($func_name);
+                self.code_expr_with_cast(&both, left);
+                self.code_expr_with_cast(&both, right);
+                self.write_instr(OpCode::CallNative);
+                self.write_byte(2);
             };
         }
 
@@ -830,7 +850,7 @@ impl ExprVisitor<'_, ()> for Generator {
                 match self.get_expr_type(sequence) {
                     ValueType::List(_) => {
                         self.write_native("list_index_set");
-                    },
+                    }
                     _ => internal_error!("Invalid slicee made it to codegen"),
                 }
                 self.code_expr_with_cast(&final_type, value);
@@ -916,7 +936,6 @@ impl ExprVisitor<'_, ()> for Generator {
     }
 
     fn visit_call_expr(&mut self, callee: &Box<Expr>, args: &Vec<Expr>, _id: usize) -> () {
-
         let params = {
             let ValueType::Function(func) = self.get_expr_type(callee) else {
                 internal_error!("Method type not recorded")
@@ -925,7 +944,7 @@ impl ExprVisitor<'_, ()> for Generator {
         };
 
         match callee.as_ref() {
-            Expr::Get { obj, id,.. } => {
+            Expr::Get { obj, id, .. } => {
                 match self.bindings.remove(&id) {
                     Some(Binding::Globals(index)) => {
                         self.write_instr(OpCode::GetGlobal);
@@ -954,7 +973,7 @@ impl ExprVisitor<'_, ()> for Generator {
                     self.write_instr(OpCode::CallUser);
                 }
                 self.write_byte((args.len() + 1) as u8);
-            },
+            }
             Expr::Variable { id, .. } => {
                 // no special loading for identifier callees
                 self.code_expr_as_is(callee);
@@ -973,8 +992,8 @@ impl ExprVisitor<'_, ()> for Generator {
                     self.write_instr(OpCode::CallUser);
                 }
                 self.write_byte(args.len() as u8);
-            },
-            _ => internal_error!("Invalid callee expression type")
+            }
+            _ => internal_error!("Invalid callee expression type"),
         }
     }
 
@@ -1054,14 +1073,12 @@ impl ExprVisitor<'_, ()> for Generator {
                     internal_error!("Invalid slice query made it to codegen")
                 }
                 self.implicit_native_call("str_slice", &[sequence, query]);
-
             }
             (ValueType::List(_), ValueType::Range(range)) => {
                 if *range != ValueType::Int {
                     internal_error!("Invalid slice query made it to codegen")
                 }
                 self.implicit_native_call("list_slice", &[sequence, query]);
-
             }
             _ => internal_error!("Unsliceable type made it to codegen"),
         }

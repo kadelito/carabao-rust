@@ -36,8 +36,7 @@ pub mod opcodes {
             let opstr = format!("{op:?}");
             print!("{linestr} {:04} {opstr:<16} ", reader.ip - 1);
             match op {
-                OpCode::DefineGlobal
-                | OpCode::Pass
+                OpCode::Pass
                 | OpCode::None
                 | OpCode::True
                 | OpCode::False

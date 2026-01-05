@@ -18,11 +18,17 @@ pub union RuntimeValue {
     float: f64,
     char: char,
     bool: bool,
-    string: ManuallyDrop<Rc<[u16]>>,
+    string: ManuallyDrop<Rc<Box<[u16]>>>,
     range: ManuallyDrop<Rc<(RuntimeValue, RuntimeValue)>>,
     function: ManuallyDrop<Rc<CarabaoFunction>>,
     native_func: ManuallyDrop<Rc<NativeFunction>>,
     list: ManuallyDrop<MyMutRc<Vec<RuntimeValue>>>,
+}
+
+impl RuntimeValue {
+    fn clone_primitive(&self) -> Self {
+        Self { int: unsafe { self.int } }
+    }
 }
 
 impl From<TypedValue> for RuntimeValue {
@@ -86,7 +92,8 @@ pub struct NativeFunction {
 impl From<TypedNativeFunction> for NativeFunction {
     fn from(value: TypedNativeFunction) -> Self {
         let TypedNativeFunction { name, func, .. } = value;
-        NativeFunction { name, func: todo!() }
+        // NativeFunction { name, func: todo!() }
+        todo!()
     }
 }
 

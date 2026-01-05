@@ -1,5 +1,5 @@
 func main() {
-    new FIB_N = 25
+    new FIB_N = 35
     new TEST_COUNT = 5
 
     new total_sec = 0.0

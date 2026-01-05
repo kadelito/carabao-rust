@@ -95,7 +95,7 @@ impl ValueType {
             ValueType::Float => TypedValue::Float(0.0),
             ValueType::Char => TypedValue::Char('\0'),
             ValueType::Bool => TypedValue::Bool(false),
-            ValueType::String => TypedValue::String(Rc::new([])),
+            ValueType::String => TypedValue::String(Rc::new([].into())),
             ValueType::Range(t) => TypedValue::Range(Rc::new(
                 (t.dummy(), t.dummy())
             )),

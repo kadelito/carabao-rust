@@ -92,8 +92,8 @@ pub mod strings {
     }
 
     pub fn concat(args: &[TypedValue]) -> TypedValue {
-        let s1 = val_into!(&args[0] => String).clone();
-        let s2 = val_into!(&args[1] => String).clone();
+        let s1 = (**val_into!(&args[0] => String)).as_ref();
+        let s2 = (**val_into!(&args[1] => String)).as_ref();
         TypedValue::String([s1, s2].concat().into_boxed_slice().into())
     }
 
@@ -105,8 +105,9 @@ pub mod strings {
             (*val_into!(start_val => Int) as usize,
             *val_into!(end_val => Int) as usize)
         };
-        let sliced = (&str[start..end]).into(); // idk what actually happens :3
-        TypedValue::String(sliced)
+        // let sliced = (&str[start..end]).into(); // idk what actually happens :3
+        // TypedValue::String(sliced)
+        TypedValue::None
     }
 
     pub fn index(args: &[TypedValue]) -> TypedValue {

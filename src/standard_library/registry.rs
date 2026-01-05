@@ -11,7 +11,7 @@ pub mod macros {
     macro_rules! val_into {
         ($val: expr => $variant: ident) => {{
             let TypedValue::$variant(val) = $val else {
-                crate::errors::macros::internal_error!("Value was not {}", stringify!($variant))
+                crate::errors::macros::internal_error!("{:?} was not {}", $val, stringify!($variant))
             };
             val
         }};

@@ -228,7 +228,7 @@ impl<'a> Lexer<'a> {
         let mut chars = lexeme.chars();
 
         // Trie for keywords
-        let c1 = chars.next().unwrap(); // must have length >= 1
+        let c1 = chars.next().unwrap(); // we know length >= 1
         let kind = match c1 {
 			'a' =>  
 				if let Some(c2) = chars.next() {
@@ -291,7 +291,20 @@ impl<'a> Lexer<'a> {
 			's' =>  
 				if let Some(c2) = chars.next() {
 					match c2 {
-						't' =>  Lexer::match_keyword(&lexeme, "string", T::String, 2),
+						't' =>  
+							if let Some(c3) = chars.next() {
+								match c3 {
+									'r' =>  
+										if let Some(c4) = chars.next() {
+											match c4 {
+												'i' =>  Lexer::match_keyword(&lexeme, "string", T::String, 4),
+												'u' =>  Lexer::match_keyword(&lexeme, "struct", T::Struct, 4),
+												_ => T::Identifier
+											}
+										} else { T::Identifier }
+									_ => T::Identifier
+								}
+							} else { T::Identifier }
 						'u' =>  Lexer::match_keyword(&lexeme, "summon", T::Summon, 2),
 						_ => T::Identifier
 					}
@@ -670,6 +683,7 @@ impl Token {
             T::Newline => "\\n",
             T::Semicolon => ";",
             T::Summon => "import",
+            T::Struct => "struct",
             T::As => "as",
             T::In => "in",
             T::Func => "func",
@@ -762,7 +776,7 @@ pub enum TokenType {
     // Keywords
     // TODO class/struct
     // Class, // im hesitant abt this one
-    // Struct,
+    Struct,
     New,
     Any,
     Int,
@@ -778,14 +792,14 @@ pub enum TokenType {
     Else,
     For,
     While,
-    // Try,
-    // Catch,
     Return,
     Break,
     Continue,
     True,
     False,
     None,
+    // Try,
+    // Catch,
 
     // Misc
     Error,

@@ -10,14 +10,13 @@ pub enum TypedValue {
     Float(f64),
     Char(char),
     Bool(bool),
-    // Note that .clone is on the REFERENCE of objects
-    // PartialEq compares object values, though
-    String(Rc<[u16]>),
+    // Double pointer avoids Rc being fat
+    // sorry cache :3
+    String(Rc<Box<[u16]>>),
     Range(Rc<(TypedValue, TypedValue)>),
     Function(Rc<TypedFunction>),
     NativeFunc(Rc<TypedNativeFunction>),
     List(Rc<RefCell<Vec<TypedValue>>>),
-    // Class(Rc<RefCell<[Value]>>),
     None,
 }
 
