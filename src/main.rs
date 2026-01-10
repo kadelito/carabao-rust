@@ -11,6 +11,7 @@ mod standard_library;
 mod stmt_ast;
 mod values;
 mod types;
+mod standard_library;
 
 use std::{env, fs, process};
 

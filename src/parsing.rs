@@ -320,6 +320,7 @@ impl<'a> Parser<'a> {
             let op = self.take_prev();
             let assignee = Box::new(expr);
             let value = Box::new(self.expression(false));
+            let value = Box::new(self.expression(false));
             expr = Expr::Assign {
                 assignee,
                 op,
@@ -408,6 +409,7 @@ impl<'a> Parser<'a> {
 
     fn comparison(&mut self) -> Expr {
         self.left_assoc_bin_series(
+            Parser::range,
             Parser::range,
             &[
                 TokenType::Less,
@@ -1043,12 +1045,15 @@ mod parsing_tests {
         assert_eq!(tester.prev, Some(Token::dummy()));
         assert!(tester.check(TokenType::DecIntLiteral));
         assert!(tester.try_consume(TokenType::DecIntLiteral)); // advances to 2
+        assert!(tester.check(TokenType::DecIntLiteral));
+        assert!(tester.try_consume(TokenType::DecIntLiteral)); // advances to 2
         //  [1][2][3]
         //  (1) ^
         assert_eq!(tester.cur, make_token("2", 1));
         assert_eq!(tester.prev, Some(make_token("1", 1)));
         assert_eq!(tester.take_prev(), make_token("1", 1));
         assert_eq!(tester.prev, None);
+        tester.expect_because(TokenType::DecIntLiteral, ParseError::NoExpression); // advances to 3
         tester.expect_because(TokenType::DecIntLiteral, ParseError::NoExpression); // advances to 3
         assert_eq!(tester.prev, Some(make_token("2", 1)));
         tester.advance(); // advances past 3

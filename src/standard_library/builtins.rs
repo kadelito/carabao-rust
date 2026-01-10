@@ -2,7 +2,7 @@ use crate::{standard_library::registry::macros::val_into, values::TypedValue};
 
 pub fn print(args: &[TypedValue]) -> TypedValue {
     let typed = val_into!(&args[0] => Any);
-    print!("{typed}"); // we need a type to know how to format
+    print!("{typed}");
     TypedValue::None
 }
 

@@ -259,6 +259,10 @@ impl VM {
                 let int = self.read_byte().cast_signed() as i64;
                 self.stack.push(TypedValue::Int(int));
             }
+            OpCode::LoadByte => {
+                let int = self.read_byte().cast_signed() as i64;
+                self.stack.push(TypedValue::Int(int));
+            }
             OpCode::Jump => {
                 let offset = self.read_short() as i16;
                 self.top_frame().ip = self.top_frame().ip.strict_add_signed(offset as isize);
@@ -359,6 +363,10 @@ impl VM {
                 return Ok(SuccessStatus::ReturnTop(value));
             }
             OpCode::AnyToInt => unwrap_any!(Int),
+            OpCode::AnyToFloat => unwrap_any!(Float),
+            OpCode::AnyToBool => unwrap_any!(Bool),
+            OpCode::AnyToChar => unwrap_any!(Char),
+            OpCode::AnyToString => unwrap_any!(String),
             OpCode::AnyToFloat => unwrap_any!(Float),
             OpCode::AnyToBool => unwrap_any!(Bool),
             OpCode::AnyToChar => unwrap_any!(Char),

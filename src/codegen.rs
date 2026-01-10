@@ -14,6 +14,8 @@ use crate::{
     types::*,
     values::*,
 };
+#[cfg(feature = "debug")]
+use crate::debug::opcodes::disassemble;
 
 #[derive(Debug, TryFromPrimitive, IntoPrimitive)]
 #[repr(u8)]
@@ -113,6 +115,7 @@ pub fn generate(ast: &Vec<Stmt>, context: AnalysisResult) -> TypedFunction {
     for stmt in ast {
         generator.code_stmt(stmt);
     }
+    generator.context.prev_line = 0;
     generator.context.prev_line = 0;
     generator.write_instr(OpCode::None);
     generator.write_instr(OpCode::Return);
@@ -387,6 +390,10 @@ impl Generator {
         let start = self.context.function.code.len();
         self.context.loop_starts.push(start);
         start
+    fn begin_loop(&mut self) -> usize {
+        let start = self.context.function.code.len();
+        self.context.loop_starts.push(start);
+        start
     }
 
     /// Uses the current length as the loop end index,
@@ -636,6 +643,10 @@ where
                             break   // 1 by default, loop 2 end
                             break 3 // to loop {3 - 3 = 0} end
                             break 4 // invalid
+                            break 1 // to loop {3 - 1 = 2} end
+                            break   // 1 by default, loop 2 end
+                            break 3 // to loop {3 - 3 = 0} end
+                            break 4 // invalid
                         }
                         // loop 2 end
                     }
@@ -703,6 +714,8 @@ impl ExprVisitor<'_, ()> for Generator {
         id: usize,
     ) {
         self.update_loc(op);
+
+        let before_operands = self.context.function.code.len();
 
         let both = self
             .bin_types

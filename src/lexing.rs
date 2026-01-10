@@ -114,6 +114,9 @@ impl<'a> Lexer<'a> {
             TokenType::DecIntLiteral
             | TokenType::HexIntLiteral
             | TokenType::BinIntLiteral
+            TokenType::DecIntLiteral
+            | TokenType::HexIntLiteral
+            | TokenType::BinIntLiteral
             | TokenType::FloatLiteral
             | TokenType::CharLiteral
             | TokenType::StringLiteral
@@ -397,6 +400,12 @@ impl<'a> Lexer<'a> {
                 2  => TokenType::BinIntLiteral,
                 _ => unreachable!()
             };
+            kind = match base {
+                10 => TokenType::DecIntLiteral,
+                16 => TokenType::HexIntLiteral,
+                2  => TokenType::BinIntLiteral,
+                _ => unreachable!()
+            };
         }
         self.make_token(kind)
     }
@@ -464,6 +473,7 @@ impl<'a> Lexer<'a> {
         }
 
         if c.is_ascii_digit() {
+            return self.number(c == '0');
             return self.number(c == '0');
         }
 
@@ -770,6 +780,9 @@ pub enum TokenType {
     DoubleDot,
 
     // Literals
+    DecIntLiteral,
+    HexIntLiteral,
+    BinIntLiteral,
     DecIntLiteral,
     HexIntLiteral,
     BinIntLiteral,
