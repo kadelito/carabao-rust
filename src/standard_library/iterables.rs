@@ -1,7 +1,7 @@
-use std::{cell::RefCell, rc::Rc};
+use std::rc::Rc;
 
-use crate::{typed_values::TypedValue};
 use crate::standard_library::registry::macros::val_into;
+use crate::values::TypedValue;
 
 pub mod ranges {
     use super::*;
@@ -28,47 +28,62 @@ pub mod lists {
 
     pub fn new_list(args: &[TypedValue]) -> TypedValue {
         let elements = Vec::from(args);
-        TypedValue::List(Rc::new(RefCell::new(elements)))
+        TypedValue::List(elements.into())
     }
 
     pub fn len(args: &[TypedValue]) -> TypedValue {
         let list = val_into!(&args[0] => List);
-        TypedValue::Int(list.borrow().len() as i64)
+        TypedValue::Int(list.get().len() as i64)
     }
 
     pub fn concat(args: &[TypedValue]) -> TypedValue {
         let l2 = val_into!(&args[0] => List);
         let l1 = val_into!(&args[1] => List);
-        let mut new_list = Vec::with_capacity(l1.borrow().len() + l2.borrow().len());
-        new_list.extend_from_slice(l1.borrow().as_slice());
-        new_list.extend_from_slice(l2.borrow().as_slice());
+        let mut new_list = Vec::with_capacity(l1.get().len() + l2.get().len());
+        new_list.extend_from_slice(l1.get().as_slice());
+        new_list.extend_from_slice(l2.get().as_slice());
         TypedValue::from(new_list)
     }
 
     pub fn slice(args: &[TypedValue]) -> TypedValue {
-        let list = val_into!(&args[0] => List).borrow();
+        let list = val_into!(&args[0] => List).get();
         let (start, end) = {
             let range = val_into!(&args[1] => Range);
             let (start_val, end_val) = range.as_ref();
-            (*val_into!(start_val => Int) as usize,
-             *val_into!(end_val => Int) as usize)
+            (
+                *val_into!(start_val => Int) as usize,
+                *val_into!(end_val => Int) as usize,
+            )
         };
 
-        let sliced = Rc::new(RefCell::new(list[start..end].to_vec())); // idk what actually happens :3
-        TypedValue::List(sliced)
+        let sliced = list[start..end].to_vec(); // idk what actually happens :3
+        TypedValue::List(sliced.into())
     }
 
     pub fn index_get(args: &[TypedValue]) -> TypedValue {
-        let list = val_into!(&args[0] => List);
-        let index = *val_into!(&args[1] => Int);
-        list.borrow()[index as usize].clone()
+        let list = val_into!(&args[0] => List).get();
+        let index = {
+            let mut value = *val_into!(&args[1] => Int);
+            if value < 0 {
+                value += list.len() as i64
+            }
+            value
+        };
+        // TODO bounds checking
+        list[index as usize].clone()
     }
 
     pub fn index_set(args: &[TypedValue]) -> TypedValue {
-        let list = val_into!(&args[1] => List);
-        let index = *val_into!(&args[2] => Int);
+        let list = val_into!(&args[1] => List).get_mut();
+        let index = {
+            let mut value = *val_into!(&args[2] => Int);
+            if value < 0 {
+                value += list.len() as i64
+            }
+            value
+        };
         // double clone is unfortunate but whatever
-        list.borrow_mut()[index as usize] = args[0].clone();
+        list[index as usize] = args[0].clone();
         args[0].clone()
     }
 }
@@ -79,15 +94,14 @@ pub mod strings {
     use super::*;
 
     pub fn to_string(args: &[TypedValue]) -> TypedValue {
-        let mut buf = Vec::new();
+        let mut buf: Vec<u8> = Vec::new();
         write!(buf, "{}", args[0]).expect("writing to buffer should not fail??");
-        let str = String::from_utf8(buf)
-            .expect("i dont know how utf-8 works");
+        let str = String::from_utf8(buf).expect("i dont know how utf-8 works");
         TypedValue::from(str)
     }
 
     pub fn len(args: &[TypedValue]) -> TypedValue {
-        let TypedValue::String(s) = &args[0] else { panic!() };
+        let s = val_into!(&args[0] => String);
         TypedValue::Int(s.len() as i64)
     }
 
@@ -102,12 +116,13 @@ pub mod strings {
         let (start, end) = {
             let range = val_into!(&args[1] => Range);
             let (start_val, end_val) = range.as_ref();
-            (*val_into!(start_val => Int) as usize,
-            *val_into!(end_val => Int) as usize)
+            (
+                *val_into!(start_val => Int) as usize,
+                *val_into!(end_val => Int) as usize,
+            )
         };
-        // let sliced = (&str[start..end]).into(); // idk what actually happens :3
-        // TypedValue::String(sliced)
-        TypedValue::None
+        let sliced = (str[start..end].to_vec().into_boxed_slice()).into(); // idk what actually happens :3
+        TypedValue::String(sliced)
     }
 
     pub fn index(args: &[TypedValue]) -> TypedValue {

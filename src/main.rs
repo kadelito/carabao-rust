@@ -7,10 +7,9 @@ mod expr_ast;
 mod lexing;
 mod parsing;
 mod runtime;
-mod runtime_values;
 mod standard_library;
 mod stmt_ast;
-mod typed_values;
+mod values;
 mod types;
 
 use std::{env, fs, process};
@@ -79,7 +78,7 @@ impl Config {
 #[cfg(test)]
 mod main_tests {
     use super::*;
-    use crate::typed_values::TypedValue;
+    use crate::values::TypedValue;
 
     #[test]
     fn hello_world() {

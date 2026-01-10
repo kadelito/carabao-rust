@@ -1,13 +1,10 @@
-func overload(int x, int num) {
-    println(x + ", the integer #" + num)
+struct CoolNewType {
+    int field
 }
 
-overload(10, 1) // 10, the integer #1
+new CoolNewType obj = CoolNewType(0x7F)
 
-func overload(string str, int num) {
-    println('\"' + str + "\", the string #" + num)
-}
+println(obj.field)
 
-overload("10", 2) // 10, the string #2
-"method".overload(3) // method, the string #3
-overload(10, 4) // 10, the integer #4 (should call the first 'overload')
+obj.field = 20
+println(obj.field)

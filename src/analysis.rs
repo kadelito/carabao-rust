@@ -6,8 +6,8 @@ use crate::{
     lexing::{Token, TokenType},
     registry::GLOBAL_FUNCS,
     stmt_ast::{Stmt, StmtVisitor},
-    typed_values::*,
     types::*,
+    values::*,
 };
 
 pub fn analyze(program: &Vec<Stmt>) -> Result<AnalysisResult, Vec<UsageError>> {
@@ -18,7 +18,7 @@ pub fn analyze(program: &Vec<Stmt>) -> Result<AnalysisResult, Vec<UsageError>> {
             (*name).to_owned(),
             if name.is_empty() {
                 // these will never appear in user code, just here to preserve spacing
-                ValueType::Unchecked
+                ValueType::None
             } else {
                 obj.get_type()
             },
@@ -59,6 +59,7 @@ pub enum Binding {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum UsageError {
     TypeError,
+    TypeDoesntExist,
     UndefinedIdent,
     InvalidAssign,
     MustInitGlobal,
@@ -74,6 +75,7 @@ pub enum UsageError {
     WhichFunction,
     DontGotFields,
     NoSuchField,
+    NoFieldToSet,
     CantCallThat,
     InvalidSlice,
 }
@@ -116,9 +118,8 @@ struct Resolver<'ast> {
     context: FunctionContext<'ast>,
 
     errors: Vec<UsageError>,
-    /// Global variables only.
-    /// No main script locals or variables in functions.
     global_bindings: Vec<VarData>,
+    user_types: HashMap<&'ast str, ValueType>,
     final_data: AnalysisResult,
 }
 
@@ -126,8 +127,9 @@ impl Resolver<'_> {
     fn new() -> Self {
         Self {
             context: FunctionContext::new(true, ValueType::None),
-            global_bindings: Vec::new(),
             errors: Vec::new(),
+            global_bindings: Vec::new(),
+            user_types: HashMap::new(),
             final_data: AnalysisResult::new(),
         }
     }
@@ -140,7 +142,7 @@ struct VarData {
     depth: usize,
 }
 
-impl<'ast> Resolver<'ast> {
+impl<'me, 'ast> Resolver<'ast> {
     pub fn resolve(&mut self, stmts: &'ast Vec<Stmt>) -> Result<AnalysisResult, Vec<UsageError>> {
         for stmt in stmts {
             self.resolve_stmt(stmt);
@@ -170,11 +172,24 @@ impl<'ast> Resolver<'ast> {
 
     fn resolve_expr(&mut self, expr: &Expr) -> ValueType {
         let expr_type = expr.accept(self);
-        // Save type of each sub-expression
+        // let actual_type = {
+        //     // Get resolved value
+        //     self.resolve_type(&expr_type)
+        //         .map(|t| t.clone())
+        //         .unwrap_or_else(|| self.error_at_expr(expr, UsageError::TypeDoesntExist))
+        // };
         self.final_data
             .expr_types
             .insert(expr.id(), expr_type.clone());
         expr_type
+    }
+
+    fn resolve_type(&'me self, val_type: &'me ValueType) -> Option<&'me ValueType> {
+        if let ValueType::UserType(ident) = val_type {
+            self.user_types.get(ident.lexeme().as_str())
+        } else {
+            Some(val_type)
+        }
     }
 
     fn get_identifier(&self, ident: &str) -> Option<(Binding, &VarData)> {
@@ -185,7 +200,9 @@ impl<'ast> Resolver<'ast> {
             // The main script needs to account for globals in the stack
             // (not stored in context.local_bindings)
             self.global_bindings.len()
-        } else { 0 };
+        } else {
+            0
+        };
         for (slot, data) in self.context.local_bindings.iter().enumerate().rev() {
             if data.name == *ident {
                 return Some((Stack(slot + globals_offset), data));
@@ -224,6 +241,10 @@ impl<'ast> Resolver<'ast> {
         }
 
         declarations
+    }
+
+    fn declare_hidden(&mut self) {
+        self.declare(String::new(), ValueType::Unchecked);
     }
 
     fn declare(&mut self, name: String, val_type: ValueType) {
@@ -350,7 +371,7 @@ impl<'ast> Resolver<'ast> {
             .map(|arg| self.resolve_expr(arg))
             .collect::<Box<[ValueType]>>();
 
-        let mut definitions = self.get_all_identifiers(identifier.lexeme().unwrap());
+        let mut definitions = self.get_all_identifiers(identifier.lexeme());
         if definitions.is_empty() {
             return self.error_at_token(identifier, UsageError::UndefinedIdent);
         }
@@ -408,7 +429,7 @@ impl<'ast> Resolver<'ast> {
             if let Some(funcs) = self
                 .context
                 .function_backlog
-                .get_mut(identifier.lexeme().unwrap())
+                .get_mut(identifier.lexeme())
                 && let Some(func) = funcs[correct_index].take()
             {
                 self.finish_function(func);
@@ -432,15 +453,44 @@ impl<'ast> Resolver<'ast> {
 }
 
 impl<'ast> StmtVisitor<'ast, ()> for Resolver<'ast> {
-    fn visit_summon_stmt(&mut self, _path: &Vec<Token>, _alias: &Option<Token>, _id: usize) {
+    fn visit_summon_stmt(&mut self, _path: &Vec<Token>, _alias: Option<&Token>, _id: usize) {
         todo!() // summons
+    }
+
+    fn visit_struct_stmt(&mut self, name: &'ast Token, fields: &'ast Vec<(Token, ValueType)>) {
+        let new_type = ValueType::Object(
+            ObjectType {
+                fields: fields
+                    .into_iter()
+                    .map(|(tk, vt)| (tk.copy_ident(), vt.clone()))
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            }
+            .into(),
+        );
+        self.user_types.insert(name.lexeme(), new_type);
+        // Create new ones by calling the name
+        // like struct Node {...} -> new node = Node(...)
+        self.declare(
+            name.copy_ident(),
+            FunctionType {
+                ret_type: ValueType::UserType(name.clone()),
+                native: true,
+                params: fields
+                    .iter()
+                    .map(|(_, vt)| vt.clone())
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            }
+            .into(),
+        );
     }
 
     fn visit_var_stmt(
         &mut self,
         name: &Token,
-        explicit_type: &Option<ValueType>,
-        value: &'ast Option<Box<Expr>>,
+        explicit_type: Option<&ValueType>,
+        value: Option<&'ast Expr>,
     ) {
         self.update_loc(name);
 
@@ -470,15 +520,15 @@ impl<'ast> StmtVisitor<'ast, ()> for Resolver<'ast> {
         self.exit_scope();
     }
 
-    fn visit_expression_stmt(&mut self, expression: &'ast Box<Expr>) {
+    fn visit_expression_stmt(&mut self, expression: &'ast Expr) {
         self.resolve_expr(expression);
     }
 
     fn visit_if_stmt(
         &mut self,
-        condition: &'ast Box<Expr>,
-        true_branch: &'ast Box<Stmt>,
-        false_branch: &'ast Option<Box<Stmt>>,
+        condition: &'ast Expr,
+        true_branch: &'ast Stmt,
+        false_branch: Option<&'ast Stmt>,
     ) {
         self.expect_type(&ValueType::Bool, condition);
         // TODO control flow analysis
@@ -488,30 +538,33 @@ impl<'ast> StmtVisitor<'ast, ()> for Resolver<'ast> {
         }
     }
 
-    fn visit_while_stmt(&mut self, condition: &Box<Expr>, body: &'ast Box<Stmt>) {
+    fn visit_while_stmt(&mut self, condition: &Expr, body: &'ast Stmt) {
         self.expect_type(&ValueType::Bool, condition);
         self.context.loop_depth += 1;
         self.resolve_stmt(body);
         self.context.loop_depth -= 1;
     }
 
-    fn visit_for_stmt(&mut self, loop_var: &Token, sequence: &Box<Expr>, body: &'ast Box<Stmt>) {
+    fn visit_for_stmt(&mut self, loop_var: &Token, sequence: &Expr, body: &'ast Stmt) {
         self.update_loc(loop_var);
 
         self.enter_scope();
         let local_var_type = match self.resolve_expr(sequence) {
             ValueType::String => {
-                self.declare(String::new(), ValueType::Int);
+                self.declare_hidden();
                 ValueType::Char
             }
             ValueType::List(value_type) => {
-                self.declare(String::new(), ValueType::Int);
+                self.declare_hidden();
                 *value_type
             }
-            ValueType::Range(t) => match *t {
-                ValueType::Int => ValueType::Int,
-                _ => self.error_at_expr(sequence, UsageError::NotIterable),
-            },
+            ValueType::Range(t) => {
+                self.declare_hidden(); // the right bound (copied)
+                match *t {
+                    ValueType::Int => ValueType::Int,
+                    _ => self.error_at_expr(sequence, UsageError::NotIterable),
+                }
+            }
             _ => self.error_at_expr(sequence, UsageError::NotIterable),
         };
         self.declare(loop_var.copy_ident(), local_var_type);
@@ -523,14 +576,14 @@ impl<'ast> StmtVisitor<'ast, ()> for Resolver<'ast> {
         self.exit_scope();
     }
 
-    fn visit_keyword_stmt(&mut self, keyword: &Token, arg: &Option<Box<Expr>>) {
+    fn visit_keyword_stmt(&mut self, keyword: &Token, arg: Option<&Expr>) {
         self.update_loc(keyword);
 
         match keyword.kind() {
             TokenType::Break | TokenType::Continue => {
                 let mut loops_to_jump = 1;
                 if let Some(arg) = arg {
-                    let Expr::Literal { val, .. } = &**arg else {
+                    let Expr::Literal { val, .. } = arg else {
                         self.error_at_expr(arg, UsageError::InvalidLoopControl);
                         return;
                     };
@@ -574,7 +627,6 @@ impl<'ast> StmtVisitor<'ast, ()> for Resolver<'ast> {
         name: &'ast Token,
         params: &'ast Vec<(Token, ValueType)>,
         body: &'ast Vec<Stmt>,
-        _id: usize,
     ) {
         self.update_loc(name);
 
@@ -586,7 +638,7 @@ impl<'ast> StmtVisitor<'ast, ()> for Resolver<'ast> {
         // Wait for resolving until first call
         // No forward declarations in this household
         let temp = TempFunction {
-            name: name.lexeme().unwrap(),
+            name: name.lexeme(),
             ret_type,
             params,
             body,
@@ -602,9 +654,9 @@ impl<'ast> ExprVisitor<'_, ValueType> for Resolver<'ast> {
     /// Condition must be bool, two outcomes must be the same value
     fn visit_conditional_expr(
         &mut self,
-        left: &Box<Expr>,
-        middle: &Box<Expr>,
-        right: &Box<Expr>,
+        left: &Expr,
+        middle: &Expr,
+        right: &Expr,
         _id: usize,
     ) -> ValueType {
         self.expect_type(&ValueType::Bool, left);
@@ -619,15 +671,16 @@ impl<'ast> ExprVisitor<'_, ValueType> for Resolver<'ast> {
 
     fn visit_binary_expr(
         &mut self,
-        left: &Box<Expr>,
+        left: &Expr,
         op: &Token,
-        right: &Box<Expr>,
+        right: &Expr,
         id: usize,
     ) -> ValueType {
-        self.update_loc(op);
-
         let left = self.resolve_expr(left);
         let right = self.resolve_expr(right);
+        
+        self.update_loc(op);
+
         // TODO check overloaded here specifically
         let Some(both) = ValueType::coerce_binary(&left, op.kind() == TokenType::Plus, &right)
         else {
@@ -646,8 +699,8 @@ impl<'ast> ExprVisitor<'_, ValueType> for Resolver<'ast> {
                 _ => self.error_at_token(op, UsageError::InvalidRange),
             };
         }
-        // after this point, both are the same type
         match both {
+            ValueType::Unchecked => ValueType::Unchecked,
             ValueType::Any => {
                 // TODO any in binary operators
                 todo!()
@@ -707,32 +760,31 @@ impl<'ast> ExprVisitor<'_, ValueType> for Resolver<'ast> {
                 | TokenType::LessEqual => ValueType::Bool,
                 _ => self.error_at_token(op, UsageError::InvalidOperator),
             },
-            ValueType::Object { .. } => {
-                todo!() // Operator overloading?
-            }
-            ValueType::Range(value_type) => todo!("adding numeric ranges?"),
-            ValueType::Function { .. } => panic!(),
-            ValueType::Unchecked => panic!(),
+            ValueType::Object { .. } => internal_error!("Nameless object in sym binary expr"),
+            ValueType::Range(value_type) => todo!(), // TODO? adding numeric ranges
+            ValueType::Function { .. } => internal_error!("Function in sym binary expr"),
+            ValueType::UserType(_) => internal_error!("User type in sym binary expr"),
         }
     }
 
     fn visit_assign_expr(
         &mut self,
-        assignee: &Box<Expr>,
-        value: &Box<Expr>,
-        assign_id: usize,
+        assignee: &Expr,
+        op: &'_ Token, // TODO consider different operation tokens
+        value: &Expr,
+        assign_expr_id: usize,
     ) -> ValueType {
         let val_type = self.resolve_expr(&value);
-        match &**assignee {
+        match assignee {
             Expr::Variable {
                 identifier,
                 id: var_id,
             } => {
-                match self.get_identifier(identifier.lexeme().unwrap()) {
+                match self.get_identifier(identifier.lexeme()) {
                     Some((binding, data)) => {
                         let data = data.clone();
                         // record id of outermost assign, not the assignee
-                        self.final_data.bindings.insert(assign_id, binding);
+                        self.final_data.bindings.insert(assign_expr_id, binding);
                         self.expect_resolved_type(&data.val_type, value, &val_type);
                         self.final_data
                             .expr_types
@@ -745,8 +797,28 @@ impl<'ast> ExprVisitor<'_, ValueType> for Resolver<'ast> {
                     }
                 }
             }
-            Expr::Get { obj, property, .. } => {
-                todo!() // TODO set exprs
+            Expr::Get { obj, property, id: get_id } => {
+                let obj_type = self.resolve_expr(obj);
+                let Some(obj_type) = self.resolve_type(&obj_type) else {
+                    return self.error_at_expr(&obj, UsageError::TypeDoesntExist);
+                };
+                match obj_type {
+                    ValueType::Unchecked => ValueType::Unchecked,
+                    ValueType::Object(object_type) => {
+                        let ObjectType { fields } = object_type.as_ref();
+                        match fields.iter().enumerate().rev().find(|(_, (field, _))| field == property.lexeme() ) {
+                            Some((index, (_, v_type))) => {
+                                let field_type = v_type.clone();
+                                self.expect_resolved_type(&field_type, value, &val_type);
+                                // store the field index
+                                self.final_data.bindings.insert(*get_id, Binding::Stack(index));
+                                field_type // return the type AFTER coercion
+                            },
+                            None => self.error_at_token(property, UsageError::NoSuchField),
+                        }
+                    },
+                    _ => self.error_at_expr(obj, UsageError::NoFieldToSet)
+                }
             }
             Expr::Slice {
                 sequence, query, ..
@@ -774,7 +846,7 @@ impl<'ast> ExprVisitor<'_, ValueType> for Resolver<'ast> {
         }
     }
 
-    fn visit_cast_expr(&mut self, expr: &Box<Expr>, new_type: &ValueType, _id: usize) -> ValueType {
+    fn visit_cast_expr(&mut self, expr: &Expr, new_type: &ValueType, _id: usize) -> ValueType {
         let old_type = self.resolve_expr(expr);
         if !ValueType::can_convert_type(new_type, &old_type) {
             self.error_at_expr(expr, UsageError::TypeError);
@@ -785,7 +857,7 @@ impl<'ast> ExprVisitor<'_, ValueType> for Resolver<'ast> {
     fn visit_unary_expr(
         &mut self,
         op: &Token, // theres only 3 operators and they're all very similar
-        target: &Box<Expr>,
+        target: &Expr,
         _prefix: &bool,
         _id: usize,
     ) -> ValueType {
@@ -822,13 +894,12 @@ impl<'ast> ExprVisitor<'_, ValueType> for Resolver<'ast> {
         }
     }
 
-    fn visit_call_expr(&mut self, callee: &Box<Expr>, args: &Vec<Expr>, _id: usize) -> ValueType {
+    fn visit_call_expr(&mut self, callee: &Expr, args: &Vec<Expr>, _id: usize) -> ValueType {
         if args.len() >= u8::MAX.into() {
             self.error_at_expr(args.last().unwrap(), UsageError::TooManyArgs);
         }
 
         let args = args.iter().collect::<Vec<&Expr>>();
-        let callee = callee.as_ref();
 
         match callee {
             Expr::Variable { identifier, id } => {
@@ -864,7 +935,10 @@ impl<'ast> ExprVisitor<'_, ValueType> for Resolver<'ast> {
                     | ValueType::Bool
                     | ValueType::String
                     | ValueType::Range(_)
-                    | ValueType::List(_) => self.error_at_expr(callee, UsageError::CantCallThat),
+                    | ValueType::List(_)
+                    | ValueType::UserType(_) => {
+                        self.error_at_expr(callee, UsageError::CantCallThat)
+                    }
                     ValueType::Function(func_type) => {
                         // some other expression that evaluated to a function
                         // literal/lambda?
@@ -889,7 +963,7 @@ impl<'ast> ExprVisitor<'_, ValueType> for Resolver<'ast> {
     fn visit_variable_expr(&mut self, identifier: &Token, id: usize) -> ValueType {
         self.update_loc(identifier);
 
-        match self.get_identifier(identifier.lexeme().unwrap()) {
+        match self.get_identifier(identifier.lexeme()) {
             Some((binding, data)) => {
                 let mut var_type = data.val_type.clone();
                 self.final_data.bindings.insert(id, binding);
@@ -912,9 +986,9 @@ impl<'ast> ExprVisitor<'_, ValueType> for Resolver<'ast> {
 
     fn visit_boolean_expr(
         &mut self,
-        left: &'_ Box<Expr>,
+        left: &'_ Expr,
         op: &'_ Token,
-        right: &'_ Box<Expr>,
+        right: &'_ Expr,
         _id: usize,
     ) -> ValueType {
         self.update_loc(op);
@@ -926,8 +1000,8 @@ impl<'ast> ExprVisitor<'_, ValueType> for Resolver<'ast> {
 
     fn visit_slice_expr(
         &mut self,
-        sequence: &'_ Box<Expr>,
-        query: &'_ Box<Expr>,
+        sequence: &'_ Expr,
+        query: &'_ Expr,
         _id: usize,
     ) -> ValueType {
         let seq_type = self.resolve_expr(sequence);
@@ -953,11 +1027,15 @@ impl<'ast> ExprVisitor<'_, ValueType> for Resolver<'ast> {
         };
     }
 
-    fn visit_get_expr(&mut self, obj: &'_ Box<Expr>, property: &'_ Token, id: usize) -> ValueType {
+    fn visit_get_expr(&mut self, obj: &'_ Expr, property: &'_ Token, id: usize) -> ValueType {
         self.update_loc(property);
-        let property_str = property.lexeme().unwrap().as_str();
+        let property_str = property.lexeme().as_str();
+        let obj_type = self.resolve_expr(obj);
+        let Some(obj_type) = self.resolve_type(&obj_type) else {
+            return self.error_at_expr(&obj, UsageError::TypeDoesntExist);
+        };
 
-        match self.resolve_expr(obj) {
+        match obj_type {
             ValueType::String => match property_str {
                 "len" => return ValueType::Int,
                 _ => self.error_at_token(property, UsageError::NoSuchField),
@@ -967,10 +1045,24 @@ impl<'ast> ExprVisitor<'_, ValueType> for Resolver<'ast> {
                 _ => self.error_at_token(property, UsageError::NoSuchField),
             },
             ValueType::Range(value_type) => match property_str {
-                "start" | "end" => *value_type,
+                "start" | "end" => value_type.as_ref().clone(),
                 _ => self.error_at_token(property, UsageError::NoSuchField),
             },
-            ValueType::Object(object_type) => todo!(),
+            ValueType::Object(object_type) => {
+                let ObjectType { fields } = object_type.as_ref();
+                // search backwards
+                // if they define multiple fields with the same name
+                // they deserve the shadowing
+                match fields.iter().enumerate().rev().find(|(_, (field, _))| field == property_str ) {
+                    Some((index, (_, v_type))) => {
+                        let field_type = v_type.clone();
+                        // store the field index
+                        self.final_data.bindings.insert(id, Binding::Stack(index));
+                        field_type
+                    },
+                    None => self.error_at_token(property, UsageError::NoSuchField),
+                }
+            }
             _ => self.error_at_expr(obj, UsageError::DontGotFields),
         }
     }

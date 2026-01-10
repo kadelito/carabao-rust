@@ -1,4 +1,4 @@
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub enum TokenizationError {
@@ -626,8 +626,8 @@ impl Token {
         self.lexeme.take()
     }
 
-    pub fn lexeme(&self) -> Option<&String> {
-        self.lexeme.as_ref()
+    pub fn lexeme(&self) -> &String {
+        self.lexeme.as_ref().expect("This token's lexeme should not have been taken yet")
     }
 
     pub fn line(&self) -> u32 {
@@ -641,80 +641,85 @@ impl Token {
     pub fn error(&self) -> Option<TokenizationError> {
         self.error
     }
+}
 
-    pub fn to_string(&self) -> String {
-        use TokenType as T;
-        if let Some(str) = &self.lexeme {
-            return str.to_owned();
-        }
-        match &self.kind {
-            T::OpenParen => "(",
-            T::CloseParen => ")",
-            T::OpenBrace => "{",
-            T::CloseBrace => "}",
-            T::OpenBracket => "[",
-            T::CloseBracket => "]",
-            T::Dot => ".",
-            T::Comma => ",",
-            T::Question => "?",
-            T::Colon => ":",
-            T::Bang => "!",
-            T::Tilde => "~",
-            T::Plus => "+",
-            T::Minus => "-",
-            T::Star => "*",
-            T::FSlash => "/",
-            T::Percent => "%",
-            T::Ampersand => "&",
-            T::Carrot => "^",
-            T::VertBar => "|",
-            T::DoubleLess => "<<",
-            T::DoubleGreater => ">>",
-            T::Less => "<",
-            T::Greater => ">",
-            T::GreaterEqual => ">=",
-            T::LessEqual => "<=",
-            T::BangEqual => "!=",
-            T::DoubleEqual => "==",
-            T::DoubleAmpersand => "&&",
-            T::DoubleVertBar => "||",
-            T::DoubleDot => "..",
-            T::Equal => "=",
-            T::Newline => "\\n",
-            T::Semicolon => ";",
-            T::Summon => "import",
-            T::Struct => "struct",
-            T::As => "as",
-            T::In => "in",
-            T::Func => "func",
-            T::If => "if",
-            T::Else => "else",
-            T::For => "for",
-            T::While => "while",
-            T::Return => "return",
-            T::Break => "break",
-            T::Continue => "continue",
-            T::True => "true",
-            T::False => "false",
-            T::None => "none",
-            T::New => "auto",
-            T::Any => "any",
-            T::Int => "int",
-            T::Bool => "bool",
-            T::Float => "float",
-            T::Char => "char",
-            T::String => "string",
-            T::DecIntLiteral => "[Int-10]",
-            T::HexIntLiteral => "[Int-16]",
-            T::BinIntLiteral => "[Int-2]",
-            T::FloatLiteral => "[Float]",
-            T::CharLiteral => "[Char]",
-            T::StringLiteral => "[String]",
-            T::Identifier => "[Identifier]",
-            T::Error => "[Error]",
-            T::EOF => "[EOF]",
-        }
-        .to_owned()
+impl Display for Token {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", {
+            use TokenType as T;
+            if let Some(str) = &self.lexeme {
+                str.to_owned()
+            } else {
+                match &self.kind {
+                    T::OpenParen => "(",
+                    T::CloseParen => ")",
+                    T::OpenBrace => "{",
+                    T::CloseBrace => "}",
+                    T::OpenBracket => "[",
+                    T::CloseBracket => "]",
+                    T::Dot => ".",
+                    T::Comma => ",",
+                    T::Question => "?",
+                    T::Colon => ":",
+                    T::Bang => "!",
+                    T::Tilde => "~",
+                    T::Plus => "+",
+                    T::Minus => "-",
+                    T::Star => "*",
+                    T::FSlash => "/",
+                    T::Percent => "%",
+                    T::Ampersand => "&",
+                    T::Carrot => "^",
+                    T::VertBar => "|",
+                    T::DoubleLess => "<<",
+                    T::DoubleGreater => ">>",
+                    T::Less => "<",
+                    T::Greater => ">",
+                    T::GreaterEqual => ">=",
+                    T::LessEqual => "<=",
+                    T::BangEqual => "!=",
+                    T::DoubleEqual => "==",
+                    T::DoubleAmpersand => "&&",
+                    T::DoubleVertBar => "||",
+                    T::DoubleDot => "..",
+                    T::Equal => "=",
+                    T::Newline => "\\n",
+                    T::Semicolon => ";",
+                    T::Summon => "import",
+                    T::Struct => "struct",
+                    T::As => "as",
+                    T::In => "in",
+                    T::Func => "func",
+                    T::If => "if",
+                    T::Else => "else",
+                    T::For => "for",
+                    T::While => "while",
+                    T::Return => "return",
+                    T::Break => "break",
+                    T::Continue => "continue",
+                    T::True => "true",
+                    T::False => "false",
+                    T::None => "none",
+                    T::New => "auto",
+                    T::Any => "any",
+                    T::Int => "int",
+                    T::Bool => "bool",
+                    T::Float => "float",
+                    T::Char => "char",
+                    T::String => "string",
+                    T::DecIntLiteral => "[Int-10]",
+                    T::HexIntLiteral => "[Int-16]",
+                    T::BinIntLiteral => "[Int-2]",
+                    T::FloatLiteral => "[Float]",
+                    T::CharLiteral => "[Char]",
+                    T::StringLiteral => "[String]",
+                    T::Identifier => "[Identifier]",
+                    T::Error => "[Error]",
+                    T::EOF => "[EOF]",
+                }
+                .to_owned()
+            }
+        })
     }
 }
 

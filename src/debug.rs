@@ -2,12 +2,12 @@ use std::mem::discriminant;
 
 use crate::expr_ast::*;
 use crate::lexing::*;
-use crate::typed_values::*;
+use crate::values::*;
 use crate::stmt_ast::*;
 use crate::types::*;
 
 pub mod opcodes {
-    use crate::{registry::GLOBAL_FUNCS, codegen::OpCode, types::ValueType, typed_values::{TypedFunction, TypedValue}};
+    use crate::{registry::GLOBAL_FUNCS, codegen::OpCode, types::ValueType, values::{TypedFunction, TypedValue}};
 
     pub fn disassemble(func: &TypedFunction) {
         
@@ -80,13 +80,10 @@ pub mod opcodes {
                 | OpCode::IntLess
                 | OpCode::IntGreater
                 | OpCode::BoolNot
-                // opcode description already printed,
-                // no more info so go to next line
                     => println!(),
                 #[cfg(test)]
                 OpCode::TESTTakeInput
                 | OpCode::TESTYield
-                    // see above
                     => println!(),
                 OpCode::Constant => {
                     println!("{:?}", reader.constant());
@@ -95,7 +92,9 @@ pub mod opcodes {
                 | OpCode::SetLocal
                 | OpCode::CallNative
                 | OpCode::CallUser
-                | OpCode::LoadByte => {
+                | OpCode::LoadByte 
+                | OpCode::FieldGet 
+                | OpCode::FieldSet => {
                     let b= reader.byte();
                     println!("{b:02}");
                 }
@@ -160,161 +159,7 @@ struct AstPrinter {
 }
 
 pub fn expr_to_str(expr: &Expr, as_tree: bool) -> String {
-    expr.accept(&mut AstPrinter { as_tree, depth: -1 })
-}
-
-impl AstPrinter {
-    fn to_str(&mut self, expr: &Expr) -> String {
-        let s = expr.accept(self);
-        if self.as_tree {
-            return s;
-        }
-        match expr {
-            Expr::Literal { .. }
-            | Expr::Unary { .. }
-            | Expr::Call { .. }
-            | Expr::Variable { .. } => s,
-            _ => format!("({})", s),
-        }
-    }
-}
-
-impl ExprVisitor<'_, String> for AstPrinter {
-    fn visit_conditional_expr(
-        &mut self,
-        left: &Box<Expr>,
-        middle: &Box<Expr>,
-        right: &Box<Expr>, _id: usize
-    ) -> String {
-        self.depth += 1;
-        let s = if self.as_tree {
-            let pre = ":   ".repeat(self.depth as usize);
-            let left = self.to_str(&left);
-            let middle = self.to_str(&middle);
-            let right = self.to_str(&right);
-            format!("{}{{{} ?\n{} :\n{}}}", pre, left, middle, right)
-        } else {
-            format!(
-                "{} ? {} : {}",
-                self.to_str(&left),
-                self.to_str(&middle),
-                self.to_str(&right)
-            )
-        };
-        self.depth -= 1;
-        s
-    }
-
-    fn visit_binary_expr(&mut self, left: &Box<Expr>, op: &Token, right: &Box<Expr>, _id: usize) -> String {
-        self.depth += 1;
-        let s;
-        if self.as_tree {
-            let pre1 = ":   ".repeat(self.depth as usize);
-            let left = self.to_str(left);
-            let right = self.to_str(right);
-            s = format!(
-                "{}{:?} {{\n{}\n{}\n{}}}",
-                pre1,
-                op.kind(),
-                left,
-                right,
-                pre1
-            )
-        } else {
-            s = format!(
-                "{} {} {}",
-                self.to_str(left),
-                op.to_string(),
-                self.to_str(right)
-            )
-        }
-        self.depth -= 1;
-        s
-    }
-
-    fn visit_unary_expr(&mut self, op: &Token, target: &Box<Expr>, _prefix: &bool, _id: usize) -> String {
-        self.depth += 1;
-        let s;
-        if self.as_tree {
-            let pre1 = ":   ".repeat(self.depth as usize);
-            let target = self.to_str(&target);
-            s = format!("{}{:?} {{\n{}\n{}}}", pre1, op.kind(), target, pre1);
-        } else {
-            s = format!("{}{}", op.to_string(), self.to_str(target));
-        }
-        self.depth -= 1;
-        s
-    }
-
-    fn visit_literal_expr(&mut self, _repr: &Token, val: &TypedValue, _id: usize) -> String {
-        if self.as_tree {
-            format!("{}{:?}", ":   ".repeat(self.depth as usize), val)
-        } else if val.get_type() == ValueType::String {
-            format!("\"{}\"", val.to_string())
-        } else {
-            format!("{}", val.to_string())
-        }
-    }
-    
-    fn visit_assign_expr(&mut self, assignee: &Box<Expr>, value: &Box<Expr>, _id: usize) -> String {
-        
-        let assignee = self.to_str(&assignee);
-        let value = self.to_str(&value);
-
-        format!("{} = {}", assignee, value)
-    }
-    
-    fn visit_call_expr(&mut self,
-        callee: &Box<Expr>, args: &Vec<Expr>, _id: usize) -> String {
-        
-        let callee = self.to_str(&callee);
-        let args = args.iter()
-            .map(|expr| self.to_str(&expr))
-            .collect::<Vec<String>>()
-            .join(", ");
-
-        format!("{}({})", callee, args)
-    }
-    
-    fn visit_variable_expr(&mut self,
-        identifier: &Token, _id: usize) -> String {
-        identifier.lexeme().unwrap().to_owned()
-    }
-    
-    fn visit_cast_expr(&mut self, expr: &Box<Expr>, new_type: &ValueType, _id: usize) -> String {
-        format!("{} as {:?}", self.to_str(expr), new_type)
-    }
-    
-    fn visit_boolean_expr(&mut self,
-        left: &'_ Box<Expr>, op: &'_ Token, right: &'_ Box<Expr>, _id: usize) -> String {
-        format!("{} {} {}",
-            self.to_str(left),
-            op.to_string(),
-            self.to_str(right),
-        )
-    }
-    
-    fn visit_slice_expr(&mut self,
-        sequence: &'_ Box<Expr>, query: &'_ Box<Expr>, _id: usize) -> String {
-        format!("{}[{}]", self.to_str(sequence), self.to_str(query))
-    }
-    
-    fn visit_get_expr(&mut self,
-        obj: &'_ Box<Expr>, property: &'_ Token, _id: usize) -> String {
-        format!("{}.{}",
-            self.to_str(obj),
-            property.lexeme().unwrap()
-        )
-    }
-    
-    fn visit_list_expr(&mut self,
-        items: &'_ Vec<Expr>, _id: usize) -> String {
-        format!("[{}]", items.iter()
-            .map(|expr| self.to_str(&expr))
-            .collect::<Vec<String>>()
-            .join(", ")
-        )
-    }
+    String::new()
 }
 
 struct DebugAstPrinter {

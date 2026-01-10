@@ -1,9 +1,9 @@
-use std::{cell::{LazyCell, RefCell}, collections::HashMap, rc::Rc};
+use std::{cell::{LazyCell}, collections::HashMap, rc::Rc};
 
 use crate::{
     standard_library::*, 
     types::ValueType,
-    typed_values::*,
+    values::*,
 };
 
 pub mod macros {
@@ -45,7 +45,7 @@ macro_rules! native_func {
 /// An array of functions and their identifiers, accessible in Carabao code.
 /// 
 /// Blank identifiers correspond to functions that can only be called implicitly.
-pub const GLOBAL_FUNCS: LazyCell<[(&'static str, TypedValue); 17]> = LazyCell::new(|| {
+pub const GLOBAL_FUNCS: LazyCell<[(&'static str, TypedValue); 18]> = LazyCell::new(|| {
     [
         // native functions available to the user in global scope
         // the string arg refers to the identfier & internal name
@@ -54,8 +54,10 @@ pub const GLOBAL_FUNCS: LazyCell<[(&'static str, TypedValue); 17]> = LazyCell::n
         native_func!("clock",   builtins::clock as func(): Int),
         native_func!("str",     iterables::strings::to_string as func(Any): String), // str(val) or val.str()
 
+        // ==============================================
         // internal, type-unchecked functions
         // the string is the internal name, not identifier
+
         native_func!("str_len",    iterables::strings::len),
         native_func!("str_concat", iterables::strings::concat),
         native_func!("str_slice",  iterables::strings::slice),
@@ -72,6 +74,8 @@ pub const GLOBAL_FUNCS: LazyCell<[(&'static str, TypedValue); 17]> = LazyCell::n
         native_func!("new_range", iterables::ranges::new_range),
         native_func!("range_start", iterables::ranges::range_get_start),
         native_func!("range_end", iterables::ranges::range_get_end),
+
+        native_func!("new_obj", misc::objects::new_object),
     ]
 });
 

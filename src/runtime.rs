@@ -1,8 +1,5 @@
-use std::cell::LazyCell;
-use std::fmt::format;
-use std::iter::Map;
+use std::collections::HashMap;
 use std::rc::Rc;
-use std::time::Instant;
 
 use crate::ProgramError;
 use crate::analysis::analyze;
@@ -10,30 +7,21 @@ use crate::codegen::*;
 use crate::errors::macros::internal_error;
 use crate::parsing::Parser;
 use crate::registry::GLOBAL_FUNCS;
-use crate::typed_values::*;
-use crate::types::ValueType;
+use crate::values::*;
 
 const VM_STACK_CAPACITY: usize = 16384;
 const VM_CALLS_CAPACITY: usize = 256;
 
 // Useful macros
 // TODO make these fit with unions also
-macro_rules! vm_pop_val {
-    ($vm: expr, $variant: ident) => {
-        if let TypedValue::$variant(v) = vm_stack_pop!($vm) {
-            v
-        } else {
-            panic!(
-                "{} not on top of stack:\n{:?}",
-                stringify!($variant),
-                $vm.stack
-            )
-        }
-    };
-}
 macro_rules! vm_stack_pop {
     ($vm: expr) => {
         $vm.stack.pop().expect("Stack should not be empty.")
+    };
+}
+macro_rules! vm_stack_peek {
+    ($vm: expr, $dist: expr) => {
+        $vm.stack[$vm.stack.len() - 1 - $dist].clone()
     };
 }
 macro_rules! vm_unwrap_any {
@@ -50,6 +38,35 @@ macro_rules! vm_binary_op {
         let rhs = vm_pop_val!($vm, $variant);
         let lhs = vm_pop_val!($vm, $variant);
         $vm.stack.push(TypedValue::$to(lhs $op rhs))
+    }};
+}
+macro_rules! vm_pop_val {
+    ($vm: expr, $variant: ident) => {
+        if let TypedValue::$variant(v) = vm_stack_pop!($vm) {
+            v
+        } else {
+            internal_error!(
+                "{} not on top of stack:\n{:?}",
+                stringify!($variant),
+                $vm.stack
+            )
+        }
+    };
+}
+macro_rules! vm_peek_val {
+    ($vm: expr, $distance: expr, $variant: ident) => {{
+        let val = $vm.stack_peek($distance);
+        if let TypedValue::$variant(v) = val {
+            v
+        } else {
+            internal_error!(
+                "{} not at stack[top - {}] (found {}):\n{:?}",
+                stringify!($variant),
+                $distance,
+                val
+                $vm.stack
+            )
+        }
     }};
 }
 
@@ -92,7 +109,7 @@ pub struct VM {
     /// During tests, this represents the instant of creation, not execution start.
     // runtime_start: Instant,
     // TODO cached summons
-    // modules: Map<std::path::Path, Value>
+    // modules: HashMap<Box<std::path::Path>, TypedValue>,
 
     #[cfg(feature = "runtime_trace")]
     prev_line: u32,
@@ -177,12 +194,7 @@ impl VM {
     #[inline(always)]
     // this function will never be called outside of a loop so i just want to
     fn cycle(&mut self, input: &TypedValue) -> Result<SuccessStatus, ProgramError> {
-        // Redefine macros according to self
-        macro_rules! pop_val {
-            ($variant: ident) => {
-                vm_pop_val!(self, $variant)
-            };
-        }
+        // Redefine macros to 'capture' self
         macro_rules! binary_op {
             ($variant: ident $op: tt: $to: ident) => {
                 vm_binary_op!(self, $variant, $op, $to)
@@ -196,6 +208,21 @@ impl VM {
         macro_rules! stack_pop {
             () => {
                 vm_stack_pop!(self)
+            };
+        }
+        macro_rules! pop_val {
+            ($variant: ident) => {
+                vm_pop_val!(self, $variant)
+            };
+        }
+        macro_rules! stack_peek {
+            ($dist: expr) => {
+                vm_stack_peek!(self, $dist)
+            };
+        }
+        macro_rules! peek_val {
+            ($dist: expr, $variant: ident) => {
+                vm_peek_val(self, $dist, $variant)
             };
         }
 
@@ -264,10 +291,10 @@ impl VM {
                 let num_args = self.read_byte() as usize;
                 let new_bottom = self.stack.len() - num_args - 1;
                 let args = &self.stack[new_bottom + 1..];
-                let TypedValue::NativeFunc(func) = self.stack[new_bottom].clone() else {
+                let TypedValue::NativeFunc(native) = self.stack[new_bottom].clone() else {
                     internal_error!("Expected a function, got {:?}", self.stack[new_bottom])
                 };
-                let result = (func.func)(args);
+                let result = (native.func)(args);
                 self.stack.truncate(new_bottom);
                 self.stack.push(result);
             }
@@ -277,7 +304,7 @@ impl VM {
             }
             OpCode::SetLocal => {
                 let index = self.top_frame().stack_bottom + self.read_byte() as usize;
-                self.stack[index] = self.stack_peek(0);
+                self.stack[index] = stack_peek!(0);
             }
             OpCode::GetGlobal => {
                 let index = self.read_byte() as usize;
@@ -285,7 +312,18 @@ impl VM {
             }
             OpCode::SetGlobal => {
                 let index = self.read_byte() as usize;
-                self.stack[index] = self.stack_peek(0);
+                self.stack[index] = stack_peek!(0);
+            }
+            OpCode::FieldGet => {
+                let field_index = self.read_byte() as usize;
+                let obj = pop_val!(Object);
+                self.stack.push(obj.get()[field_index].clone());
+            }
+            OpCode::FieldSet => {
+                let field_index = self.read_byte() as usize;
+                let obj = pop_val!(Object);
+                let value = stack_peek!(0);
+                obj.get_mut()[field_index] = value;
             }
             OpCode::Constant => {
                 let index = self.read_byte() as usize;
@@ -401,11 +439,6 @@ impl VM {
         self.call_stack.last_mut().unwrap()
     }
 
-    /// Clones the value on the stack at `dist` from the end.
-    fn stack_peek(&self, dist: usize) -> TypedValue {
-        self.stack[self.stack.len() - 1 - dist].clone()
-    }
-
     fn runtime_error(&mut self, reason: RuntimeError) -> ProgramError {
         eprintln!("Runtime error: {:?}", reason);
         ProgramError::RuntimeError(reason)
@@ -423,7 +456,7 @@ impl VM {
 
     fn read_short(&mut self) -> u16 {
         let mut s = (self.read_byte() as u16) << 8;
-        s |= (self.read_byte() as u16);
+        s |= self.read_byte() as u16;
         s
     }
 }

@@ -1,7 +1,15 @@
-use std::{any::Any, cell::RefCell, collections::{HashMap, HashSet}, fmt::{Debug, Display, Write, write}, mem::ManuallyDrop, rc::Rc, u32};
+use std::{
+    cell::UnsafeCell,
+    fmt::{Debug, Display, Write},
+    rc::Rc,
+    u32,
+};
 
-use crate::{codegen::LineRLE, lexing::{Token, TokenType}, runtime::RuntimeError};
 use crate::types::*;
+use crate::{
+    codegen::LineRLE,
+    errors::macros::internal_error,
+};
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum TypedValue {
@@ -16,8 +24,60 @@ pub enum TypedValue {
     Range(Rc<(TypedValue, TypedValue)>),
     Function(Rc<TypedFunction>),
     NativeFunc(Rc<TypedNativeFunction>),
-    List(Rc<RefCell<Vec<TypedValue>>>),
+    List(MutRc<Vec<TypedValue>>),
+    Object(MutRc<[TypedValue]>),
     None,
+}
+
+#[derive(Debug)]
+pub struct MutRc<T: ?Sized> {
+    inner: Rc<UnsafeCell<T>>,
+}
+
+impl<T: ?Sized> MutRc<T> {
+    pub fn get(&self) -> &T {
+        unsafe { &*self.inner.get() }
+    }
+
+    pub fn get_mut(&self) -> &mut T {
+        unsafe { &mut *self.inner.get() }
+    }
+}
+
+impl<T: ?Sized> From<Box<T>> for MutRc<T> {
+    fn from(value: Box<T>) -> Self {
+        Self {
+            inner: {
+                let ptr = unsafe { &mut *Box::into_raw(value) };
+                let cell = UnsafeCell::from_mut(ptr);
+                let boxed = unsafe { Box::from_raw(cell) };
+                boxed.into()
+            },
+        }
+    }
+}
+
+// Sized version with much fewer
+impl<T: Sized> From<T> for MutRc<T> {
+    fn from(value: T) -> Self {
+        Self {
+            inner: Rc::new(UnsafeCell::new(value)),
+        }
+    }
+}
+
+impl<T: ?Sized> PartialEq for MutRc<T> {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.inner, &other.inner)
+    }
+}
+
+impl<T: ?Sized> Clone for MutRc<T> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
 }
 
 #[derive(PartialEq)]
@@ -27,7 +87,7 @@ pub struct TypedFunction {
     pub ret_type: ValueType,
     pub constants: Box<[TypedValue]>,
     pub code: Box<[u8]>,
-    pub lines: Box<[LineRLE]>
+    pub lines: Box<[LineRLE]>,
 }
 
 impl TypedFunction {
@@ -59,11 +119,7 @@ impl Debug for TypedFunction {
             ..
         } = self;
         // so func sqrt[float]: sqrt
-        write!(f, "{:?}{:?} -> {:?}",
-            name,
-            params,
-            ret_type,
-        )
+        write!(f, "{:?}{:?} -> {:?}", name, params, ret_type,)
     }
 }
 
@@ -86,11 +142,7 @@ impl Debug for TypedNativeFunction {
             ..
         } = self;
         // so func sqrt[float]: sqrt
-        write!(f, "{:?}{:?} -> {:?}",
-            name,
-            params,
-            ret_type,
-        )
+        write!(f, "{:?}{:?} -> {:?}", name, params, ret_type,)
     }
 }
 
@@ -100,12 +152,10 @@ impl Display for TypedValue {
             TypedValue::None => f.write_str("none"),
             TypedValue::Any(value) => Display::fmt(&value, f),
             TypedValue::Int(i) => f.write_str(&i.to_string()),
-            TypedValue::Float(flt) => write!(f, "{:.}", flt), // TODO better float formatting than this
+            TypedValue::Float(flt) => write!(f, "{:.}", flt),
             TypedValue::Char(c) => f.write_char(*c),
             TypedValue::Bool(b) => f.write_str(if *b { "true" } else { "false" }),
-            TypedValue::String(s) => f.write_str(
-                &String::from_utf16_lossy(&s)
-            ),
+            TypedValue::String(s) => f.write_str(&String::from_utf16_lossy(&s)),
             TypedValue::Range(range) => {
                 let (start, end) = range.as_ref();
                 write!(f, "[{start}...{end}]")
@@ -118,13 +168,24 @@ impl Display for TypedValue {
                 let TypedNativeFunction { name, ret_type, .. } = native.as_ref();
                 write!(f, "<func {name}(): {ret_type}>")
             }
-            TypedValue::List(list) => {
-                write!(f, "[{}]", list.borrow().iter()
+            TypedValue::List(list) => write!(
+                f,
+                "[{}]",
+                list.get()
+                    .iter()
                     .map(|v| v.to_string())
                     .collect::<Vec<String>>()
                     .join(", ")
-                )
-            },
+            ),
+            TypedValue::Object(obj) => write!(
+                f,
+                "{{{}}}",
+                obj.get()
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ),
         }
     }
 }
@@ -154,7 +215,7 @@ impl From<TypedNativeFunction> for TypedValue {
 
 impl From<Vec<TypedValue>> for TypedValue {
     fn from(value: Vec<TypedValue>) -> Self {
-        Self::List(Rc::new(RefCell::new(value)))
+        Self::List(value.into())
     }
 }
 
@@ -168,23 +229,42 @@ impl TypedValue {
             TypedValue::Char(_) => ValueType::Char,
             TypedValue::Bool(_) => ValueType::Bool,
             TypedValue::String(_) => ValueType::String,
-            TypedValue::Range(_) => todo!(),
+            TypedValue::Range(range) => ValueType::Range(range.0.get_type().into()),
             TypedValue::Function(function) => {
-                let TypedFunction { params, ret_type, .. } = function.as_ref();
-                ValueType::Function(FunctionType {ret_type: ret_type.clone(), params: params.clone(), native: false}.into())
+                let TypedFunction {
+                    params, ret_type, ..
+                } = function.as_ref();
+                ValueType::Function(
+                    FunctionType {
+                        ret_type: ret_type.clone(),
+                        params: params.clone(),
+                        native: false,
+                    }
+                    .into(),
+                )
             }
             TypedValue::NativeFunc(function) => {
-                let TypedNativeFunction { params, ret_type, .. } = function.as_ref();
-                ValueType::Function(FunctionType {ret_type: ret_type.clone(), params: (*params).into(), native: true}.into())
+                let TypedNativeFunction {
+                    params, ret_type, ..
+                } = function.as_ref();
+                ValueType::Function(
+                    FunctionType {
+                        ret_type: ret_type.clone(),
+                        params: (*params).into(),
+                        native: true,
+                    }
+                    .into(),
+                )
             }
-            TypedValue::List(list) => ValueType::List(Box::new(
-                if let Some(first) = list.borrow().first() {
+            TypedValue::List(list) => ValueType::List(
+                if let Some(first) = list.get().first() {
                     first.get_type()
                 } else {
                     ValueType::Any
                 }
-            )),
+                .into(),
+            ),
+            TypedValue::Object(_) => internal_error!("Runtime object does not know its fields"),
         }
     }
-
 }

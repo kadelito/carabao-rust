@@ -1,12 +1,12 @@
+import re
 """
-Assign      = assignee: Expr | op: Token | value: Expr // op for +=, *=, etc
+Object      = fields: Vec<(Token, Expr)>
 """
 exprs = """
-Object      = fields: Vec<(Token, Expr)>
 Conditional = condition: Expr | if_true: Expr | if_false: Expr
 Boolean     = left: Expr  | op: Token | right: Expr
 Binary      = left: Expr  | op: Token | right: Expr
-Assign      = assignee: Expr | value: Expr
+Assign      = assignee: Expr | op: Token | value: Expr // op for +=, *=, etc
 Cast        = expr: Expr | new_type: ValueType
 Unary       = op: Token | target: Expr | prefix: bool
 Slice       = sequence: Expr | query: Expr
@@ -22,7 +22,7 @@ Switch      = value: Expr | branches: Vec<(Expr, Stmt)>
 """
 # TODO switch statements are hard.. start with matching `any`?
 stmts = """
-Class       = name: Token | 
+Struct      = name: Token | fields: Vec<(Token, ValueType)>
 Function    = ret_type: ValueType | name: Token | params: Vec<(Token, ValueType)> | body: Vec<Stmt>
 Summon      = path: Vec<Token> | alias: Option<Token> | id: usize
 Var         = name: Token | var_type: Option<ValueType> | val: Option<Box<Expr>>
@@ -34,8 +34,45 @@ For         = var: Token | sequence: Box<Expr> | body: Stmt
 Keyword     = keyword: Token | arg: Option<Box<Expr>>
 """.strip()
 
-str_if = lambda s, b: s if b else ""
-copied = "usize".split(",")
+str_if        = lambda s, b: s if b else ""
+copied = {"usize"}
+optioninner = lambda s: s[7:-1]
+isoption = lambda s: s.startswith("Option")
+boxinner = lambda s: s[4:-1]
+isbox = lambda s: s.startswith("Box")
+
+borrowed = lambda typ, name: (
+    f"{name}: Option<&'ast {optioninner(typ)[4:-1]}>" 
+        if isoption(typ) and isbox(optioninner(typ))
+    else f"{name}: Option<&'ast {optioninner(typ)}>"
+        if isoption(typ)
+    else f"{name}: {str_if("&'ast ", typ not in copied)}{boxinner(typ) if isbox(typ) else typ}"
+)
+borrowvar = lambda typ, name: (
+    f"*{name}"
+        if typ in copied
+    else f"{name}.as_deref()"
+        if isoption(typ) and isbox(optioninner(typ))
+    else f"{name}.as_ref()"
+        if isoption(typ) or isbox(typ)
+    else name
+)
+mutborrowed = lambda typ, name: (
+    f"{name}: Option<&'ast mut {optioninner(typ)[4:-1]}>" 
+        if isoption(typ) and isbox(optioninner(typ))
+    else f"{name}: Option<&'ast mut {optioninner(typ)}>"
+        if isoption(typ)
+    else f"{name}: {str_if("&'ast mut ", typ not in copied)}{boxinner(typ) if isbox(typ) else typ}"
+)
+mutborrowvar = lambda typ, name: (
+    f"*{name}"
+        if typ in copied
+    else f"{name}.as_deref_mut()"
+        if isoption(typ) and isbox(optioninner(typ))
+    else f"{name}.as_mut()"
+        if isoption(typ) or isbox(typ)
+    else name
+)
 
 def generate(name: str, desc: str, add_id = False):
     # remove comments
@@ -53,17 +90,16 @@ def generate(name: str, desc: str, add_id = False):
 
     # =================== ENUM ===================
     # define the enum's variants
-    print("#[derive(Debug)]")
+    print( "#[derive(Debug)]")
     print(f"pub enum {name} {{")
-    print( "    // TO""DO the commented-out ones")
     for node in desc:
         print(f"    {node[0]}", end=" { ")
         for i, field in enumerate(node[1]):
             print(f"{field[0]}: {field[1]}", end="")
             if i < len(node[1]) - 1:
                 print(end=", ")
-        print(" },")
-    print("}")
+        print( " },")
+    print( "}")
     print()
 
     # =================== IMPL ===================
@@ -81,23 +117,41 @@ def generate(name: str, desc: str, add_id = False):
             print(f"{' '*12}Self::{node[0]} {{ id, .. }} => *id,")
         print(f"        }}")
         print(f"    }}")
+        print(f"    ")
     print(f"    pub fn accept<T>(&'me self, visitor: &mut impl {name}Visitor<'vis, T>) -> T {{")
     print( "        match self {")
     for node in desc:
-        print(" "*12+f"Self::{node[0]} {{ ", end="")
+        print( " "*12+f"Self::{node[0]} {{ ", end="")
         for i, field in enumerate(node[1]):
             print(f"{field[0]}", end="")
             if i < len(node[1]) - 1:
                 print(end=", ")
         print(f" }} =>\n{" "*16}visitor.visit_{node[0].lower()}_{name.lower()}(",end="")
         for i, field in enumerate(node[1]):
-            print(f"{str_if("*", field[1] in copied)}{field[0]}", end="")
+            print(f"{borrowvar(field[1], field[0])}", end="")
             if i < len(node[1]) - 1:
                 print(end=", ")
-        print("),")
-    print("        }")
-    print("    }")
-    print("}")
+        print( "),")
+    print( "        }")
+    print( "    }")
+    print( "    ")
+    print(f"    pub fn yield_to<T>(&'me mut self, invader: &mut impl {name}Invader<'vis, T>) -> T {{")
+    print( "        match self {")
+    for node in desc:
+        print( " "*12+f"Self::{node[0]} {{ ", end="")
+        for i, field in enumerate(node[1]):
+            print(f"{field[0]}", end="")
+            if i < len(node[1]) - 1:
+                print(end=", ")
+        print(f" }} =>\n{" "*16}invader.invade_{node[0].lower()}_{name.lower()}(",end="")
+        for i, field in enumerate(node[1]):
+            print(f"{mutborrowvar(field[1], field[0])}", end="")
+            if i < len(node[1]) - 1:
+                print(end=", ")
+        print( "),")
+    print( "        }")
+    print( "    }")
+    print( "}")
     print()
 
     # =================== VISITOR ===================
@@ -107,25 +161,40 @@ def generate(name: str, desc: str, add_id = False):
     for node in desc:
         print(f"    fn visit_{node[0].lower()}_{name.lower()}(&mut self,\n", end=" "*8)
         for i, field in enumerate(node[1]):
-            print(f"{field[0]}: {str_if("&'ast ", field[1] not in copied)}{field[1]}", end="")
+            print(f"{borrowed(field[1], field[0])}", end="")
             if i < len(node[1]) - 1:
                 print(end=", ")
         print(f") -> T;")
-    print("}")
+    print( "}")
+    print()
+
+    # =================== INVADER (MUTATING VISITOR) ===================
+    # define a visitor for the enum & its methods
+    visname = f"{name}Invader"
+    print(f"/// A mutating {name} visitor")
+    print(f"pub trait {visname}<'ast, T> {{")
+    for node in desc:
+        print(f"    fn invade_{node[0].lower()}_{name.lower()}(&mut self,\n", end=" "*8)
+        for i, field in enumerate(node[1]):
+            print(f"{mutborrowed(field[1], field[0])}", end="")
+            if i < len(node[1]) - 1:
+                print(end=", ")
+        print(f") -> T;")
+    print( "}")
 
 import sys
 
 tree_to_generate = sys.argv[1].lower()
 
-print("use crate::lexing::Token;")
-print("use crate::types::*;")
+print( "use crate::lexing::Token;")
+print( "use crate::types::*;")
 if tree_to_generate == "stmt":
-    print("use crate::expr_ast::Expr;")
+    print( "use crate::expr_ast::Expr;")
     print()
     generate("Stmt", stmts, add_id=False)
 elif tree_to_generate == "expr":
-    print("use crate::values::*;")
+    print( "use crate::values::*;")
     print()
     generate("Expr", exprs, add_id=True)
 else:
-    print("\nnothing to generate")
+    print( "\nnothing to generate")

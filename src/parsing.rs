@@ -1,12 +1,6 @@
-use std::{collections::HashMap, ops::IndexMut};
+use std::{collections::{HashMap, HashSet}, ops::IndexMut};
 
-use crate::{
-    expr_ast::*,
-    lexing::*,
-    stmt_ast::Stmt,
-    typed_values::*,
-    types::*,
-};
+use crate::{expr_ast::*, lexing::*, stmt_ast::Stmt, types::*, values::*};
 
 /**
  * A parser for Carabao.
@@ -17,30 +11,21 @@ pub struct Parser<'a> {
     cur: Token,
     /// The `token` most recently consumed.
     ///
-    /// `prev` is an `Option` to let the AST take ownership without cloning. 
+    /// `prev` is an `Option` to let the AST take ownership without cloning.
     prev: Option<Token>,
     ignore_newlines: bool,
     next_id: usize,
     errors: Vec<ParseError>,
     panic_mode: bool,
-    strings: HashMap<String, TypedValue>
+    strings: HashMap<String, TypedValue>,
+    /// yes its global
+    /// no i dont care
+    user_types: HashSet<String>,
 }
 
 const VALID_TYPES: [TokenType; 6] = {
     use TokenType::*;
     [Any, Int, Bool, Float, Char, String]
-};
-
-pub const BINARY_OPERATORS: [TokenType; 17] = {
-    use TokenType::*;
-    [
-        Plus, Minus, Star, FSlash, Percent,
-        Ampersand, Carrot, VertBar,
-        DoubleLess, DoubleGreater,
-        Less, Greater,
-        GreaterEqual, LessEqual, BangEqual, DoubleEqual,
-        DoubleDot
-    ]
 };
 
 impl<'a> From<Lexer<'a>> for Parser<'a> {
@@ -54,6 +39,7 @@ impl<'a> From<Lexer<'a>> for Parser<'a> {
             errors: Vec::new(),
             panic_mode: false,
             strings: HashMap::new(),
+            user_types: HashSet::new(),
         }
     }
 }
@@ -88,6 +74,8 @@ impl<'a> Parser<'a> {
             self.var_def()
         } else if self.try_consume(TokenType::Summon) {
             self.import()
+        } else if self.try_consume(TokenType::Struct) {
+            self.struct_def()
         } else {
             self.statement()
         };
@@ -97,6 +85,24 @@ impl<'a> Parser<'a> {
         }
 
         decl
+    }
+
+    fn struct_def(&mut self) -> Stmt {
+        let name = self.expect_binding();
+        self.expect(TokenType::OpenBrace);
+        let mut fields = Vec::new();
+        while !self.at_end() {
+            let field_type = self.expect_type();
+            let field = self.expect_binding();
+            fields.push((field, field_type));
+            // TODO change this if we need some delimiter
+            self.skip_newlines();
+            if self.try_consume(TokenType::CloseBrace) {
+                break;
+            }
+        }
+        self.user_types.insert(name.copy_ident());
+        Stmt::Struct { name, fields }
     }
 
     fn function_def(&mut self) -> Stmt {
@@ -130,7 +136,6 @@ impl<'a> Parser<'a> {
             name,
             params,
             body: statements,
-            id: self.new_id(),
         }
     }
 
@@ -142,7 +147,11 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        Stmt::Var { name, var_type, val }
+        Stmt::Var {
+            name,
+            var_type,
+            val,
+        }
     }
 
     fn import(&mut self) -> Stmt {
@@ -159,7 +168,11 @@ impl<'a> Parser<'a> {
             alias = Some(self.expect_binding());
         }
 
-        Stmt::Summon { path, alias, id: self.new_id() }
+        Stmt::Summon {
+            path,
+            alias,
+            id: self.new_id(),
+        }
     }
 
     fn statement(&mut self) -> Stmt {
@@ -247,7 +260,11 @@ impl<'a> Parser<'a> {
         };
         let body = Box::new(body);
 
-        Stmt::For { var, sequence, body }
+        Stmt::For {
+            var,
+            sequence,
+            body,
+        }
     }
 
     fn keyword_stmt(&mut self) -> Stmt {
@@ -300,10 +317,12 @@ impl<'a> Parser<'a> {
     fn assign(&mut self) -> Expr {
         let mut expr = self.ternary();
         if self.try_consume_any(&[TokenType::Equal]) {
+            let op = self.take_prev();
             let assignee = Box::new(expr);
             let value = Box::new(self.expression(false));
             expr = Expr::Assign {
                 assignee,
+                op,
                 value,
                 id: self.new_id(),
             };
@@ -347,11 +366,15 @@ impl<'a> Parser<'a> {
     ) -> Expr {
         // case when no left operand,
         // continue ahead if it's a unary prefix
-        if !self.check_any(&[TokenType::Bang, TokenType::Minus, TokenType::Tilde,
-                #[cfg(test)] TokenType::DoubleLess,
-                #[cfg(test)] TokenType::DoubleGreater
-            ])
-            && self.try_consume_any(operators)
+        if !self.check_any(&[
+            TokenType::Bang,
+            TokenType::Minus,
+            TokenType::Tilde,
+            #[cfg(test)]
+            TokenType::DoubleLess,
+            #[cfg(test)]
+            TokenType::DoubleGreater,
+        ]) && self.try_consume_any(operators)
         {
             self.error_at_prev(ParseError::BinOpNoLeft);
             return self.left_assoc_bin_series(operand, operators);
@@ -362,7 +385,12 @@ impl<'a> Parser<'a> {
             let op = self.take_prev();
             self.skip_newlines();
             let right = self.left_assoc_boolean_series(operand, operators);
-            left = Expr::Boolean { left: Box::new(left), op, right: Box::new(right), id: self.new_id(),};
+            left = Expr::Boolean {
+                left: Box::new(left),
+                op,
+                right: Box::new(right),
+                id: self.new_id(),
+            };
         }
         left
     }
@@ -438,7 +466,7 @@ impl<'a> Parser<'a> {
             expr
         }
     }
-    
+
     /// Parses a binary expression with `operand`
     /// and any of `operators`, equal in precedence
     fn left_assoc_bin_series(
@@ -448,10 +476,15 @@ impl<'a> Parser<'a> {
     ) -> Expr {
         // case when no left operand,
         // continue ahead if it's a unary prefix
-        if !self.check_any(&[TokenType::Bang, TokenType::Minus, TokenType::Tilde,
-                #[cfg(test)] TokenType::DoubleLess,
-                #[cfg(test)] TokenType::DoubleGreater
-            ]) && self.try_consume_any(operators)
+        if !self.check_any(&[
+            TokenType::Bang,
+            TokenType::Minus,
+            TokenType::Tilde,
+            #[cfg(test)]
+            TokenType::DoubleLess,
+            #[cfg(test)]
+            TokenType::DoubleGreater,
+        ]) && self.try_consume_any(operators)
         {
             self.error_at_prev(ParseError::BinOpNoLeft);
             return self.left_assoc_bin_series(operand, operators);
@@ -473,9 +506,14 @@ impl<'a> Parser<'a> {
     }
 
     fn unary(&mut self) -> Expr {
-        if self.try_consume_any(&[TokenType::Bang, TokenType::Minus, TokenType::Tilde,
-            #[cfg(test)] TokenType::DoubleLess,
-            #[cfg(test)] TokenType::DoubleGreater
+        if self.try_consume_any(&[
+            TokenType::Bang,
+            TokenType::Minus,
+            TokenType::Tilde,
+            #[cfg(test)]
+            TokenType::DoubleLess,
+            #[cfg(test)]
+            TokenType::DoubleGreater,
         ]) {
             self.skip_newlines();
             let op = self.take_prev();
@@ -506,11 +544,19 @@ impl<'a> Parser<'a> {
             } else if self.try_consume(TokenType::Dot) {
                 self.expect(TokenType::Identifier);
                 let attribute = self.take_prev();
-                obj = Expr::Get { obj: Box::new(obj), property: attribute, id };
+                obj = Expr::Get {
+                    obj: Box::new(obj),
+                    property: attribute,
+                    id,
+                };
             } else if self.try_consume(TokenType::OpenBracket) {
                 let query = Box::new(self.expression(true));
                 self.expect(TokenType::CloseBracket);
-                obj = Expr::Slice { sequence: Box::new(obj), query, id }
+                obj = Expr::Slice {
+                    sequence: Box::new(obj),
+                    query,
+                    id,
+                }
             } else {
                 break;
             }
@@ -551,7 +597,11 @@ impl<'a> Parser<'a> {
                 val: TypedValue::None,
                 id,
             };
-        } else if self.try_consume_any(&[TokenType::DecIntLiteral, TokenType::HexIntLiteral, TokenType::BinIntLiteral]) {
+        } else if self.try_consume_any(&[
+            TokenType::DecIntLiteral,
+            TokenType::HexIntLiteral,
+            TokenType::BinIntLiteral,
+        ]) {
             return self.parse_integer(id);
         } else if self.try_consume(TokenType::FloatLiteral) {
             let mut literal = self.take_prev();
@@ -574,11 +624,15 @@ impl<'a> Parser<'a> {
                 }
             }
         } else if self.try_consume(TokenType::StringLiteral) {
-            let mut literal = self.take_prev();
-            let mut raw = literal.lexeme().unwrap().clone();
+            let literal = self.take_prev();
+            let mut raw = literal.lexeme().clone();
             raw = raw[1..raw.len() - 1].to_owned();
             if let Some(string) = self.strings.get(&raw) {
-                return Expr::Literal { repr: literal, val: string.clone(), id };
+                return Expr::Literal {
+                    repr: literal,
+                    val: string.clone(),
+                    id,
+                };
             }
             let mut raw_chars = raw.chars();
             let mut val = String::new();
@@ -594,10 +648,10 @@ impl<'a> Parser<'a> {
                             _ => {
                                 self.error_at(&literal, ParseError::InvalidEscapeCharacter);
                                 '\\'
-                            },
+                            }
                         }
                     } else {
-                        // This will (probably) never happen, 
+                        // This will (probably) never happen,
                         // but just in case '\' is the last character in the string
                         // without another '\' preceding.
                         '\\'
@@ -609,12 +663,16 @@ impl<'a> Parser<'a> {
             }
             val.shrink_to_fit();
             let val = TypedValue::from(val);
-            
+
             // it wasn't there before, so we insert it here with the formatted string
             // Note that the pointer
             self.strings.insert(raw, val.clone());
-            
-            return Expr::Literal { repr: literal, val, id }
+
+            return Expr::Literal {
+                repr: literal,
+                val,
+                id,
+            };
         } else if self.try_consume(TokenType::CharLiteral) {
             let mut literal = self.take_prev();
             let lexeme = literal.take_lexeme().unwrap();
@@ -629,13 +687,17 @@ impl<'a> Parser<'a> {
                     _ => {
                         self.error_at(&literal, ParseError::InvalidEscapeCharacter);
                         '\\'
-                    },
+                    }
                 };
                 TypedValue::Char(c)
             } else {
                 TypedValue::Char(lexeme[1])
             };
-            return Expr::Literal { repr: literal, val, id };
+            return Expr::Literal {
+                repr: literal,
+                val,
+                id,
+            };
         } else if self.try_consume(TokenType::OpenParen) {
             let expr = self.expression(true);
             self.expect_because(TokenType::CloseParen, ParseError::ParenNotClosed);
@@ -645,7 +707,7 @@ impl<'a> Parser<'a> {
             return Expr::List { items, id };
         } else if self.try_consume(TokenType::Identifier) {
             let identifier = self.take_prev();
-            return Expr::Variable { identifier, id, };
+            return Expr::Variable { identifier, id };
         } else if self.try_consume(TokenType::Func) {
             todo!("Anonymous functions/lambdas")
         }
@@ -675,6 +737,7 @@ impl<'a> Parser<'a> {
             match self.peek().kind() {
                 // TODO other statement starts?
                 TokenType::New
+                | TokenType::Struct
                 | TokenType::Summon
                 | TokenType::Func
                 | TokenType::If
@@ -694,15 +757,12 @@ impl<'a> Parser<'a> {
 
     fn parse_integer(&mut self, id: usize) -> Expr {
         let mut literal = self.take_prev();
-        let mut str = literal
-                .take_lexeme()
-                .unwrap()
-                .into_boxed_str();
+        let mut str = literal.take_lexeme().unwrap().into_boxed_str();
         let base = match literal.kind() {
             TokenType::DecIntLiteral => 10,
             TokenType::HexIntLiteral => 16,
             TokenType::BinIntLiteral => 12,
-            _ => unreachable!()
+            _ => unreachable!(),
         };
         if base != 10 {
             // truncate the 0x or 0b
@@ -713,12 +773,13 @@ impl<'a> Parser<'a> {
                 str = str.index_mut(2..).into();
             }
         }
-        let value = i64::from_str_radix(&str, base)
-            .map_err(|_| ParseError::ParseIntError);
+        let value = i64::from_str_radix(&str, base).map_err(|_| ParseError::ParseIntError);
         match value {
-            Ok(i) => {
-                Expr::Literal {repr: literal, val: TypedValue::Int(i), id,}
-            }
+            Ok(i) => Expr::Literal {
+                repr: literal,
+                val: TypedValue::Int(i),
+                id,
+            },
             Err(e) => {
                 self.error_at(&literal, e);
                 Expr::dummy()
@@ -737,19 +798,31 @@ impl<'a> Parser<'a> {
     }
 
     fn try_consume_type(&mut self) -> Option<ValueType> {
-        Some(if self.try_consume_any(&VALID_TYPES) {
+        if self.try_consume_any(&VALID_TYPES) {
             let token = self.take_prev();
-            let mut intermediate = ValueType::from_token(token.kind()).unwrap();
+            let mut intermediate = ValueType::from_token(token).unwrap();
             while self.try_consume(TokenType::OpenBracket) {
+                // Consume brackets until not
+                // for int[][][]... or something
                 self.expect(TokenType::CloseBracket);
                 intermediate = ValueType::List(Box::new(intermediate));
             }
-            intermediate
+            Some(intermediate)
+        } else if self.check(TokenType::Identifier) && self.user_types.contains(self.peek().lexeme()) {
+            self.advance();
+            let token = self.take_prev();
+            let mut intermediate = ValueType::from_token(token).unwrap();
+            while self.try_consume(TokenType::OpenBracket) {
+                // Consume brackets until not
+                // for int[][][]... or something
+                self.expect(TokenType::CloseBracket);
+                intermediate = ValueType::List(Box::new(intermediate));
+            }
+            Some(intermediate)    
         } else if self.try_consume(TokenType::Func) {
             self.expect(TokenType::OpenParen);
             let mut params = Vec::new();
             if !self.check(TokenType::CloseParen) {
-                // still no do-while :((())
                 params.push(self.expect_type());
                 while self.try_consume(TokenType::Comma) {
                     params.push(self.expect_type());
@@ -758,18 +831,22 @@ impl<'a> Parser<'a> {
             self.expect(TokenType::CloseParen);
             let ret_type = if self.try_consume(TokenType::Colon) {
                 self.expect_type()
-                // so you technically could do:
-                // new func(int): func(int): int function_function = /* ... */
-                // new int y = function_function(1)(2) + 3 // cursed
             } else {
                 ValueType::None
             };
 
             let params = params.into_boxed_slice();
-            ValueType::Function(FunctionType { ret_type, params, native: false }.into())
+            Some(ValueType::Function(
+                FunctionType {
+                    ret_type,
+                    params,
+                    native: false,
+                }
+                .into(),
+            ))
         } else {
-            return None
-        })
+            None
+        }
     }
 
     fn expect_type(&mut self) -> ValueType {
@@ -1003,214 +1080,6 @@ mod parsing_tests {
                 panic!("'i' did not match the pattern.")
             };
             assert_eq!(f, 3.14159)
-        }
-    }
-
-    mod stateless {
-        use super::*;
-
-        #[test]
-        fn exprs() {
-            let mut expr = Parser::parse_expr_string("1+1").unwrap();
-            let mut ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(2)));
-
-            expr = Parser::parse_expr_string("5 + 3 * 2").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(11)));
-
-            expr = Parser::parse_expr_string("10 - 4 / 2").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(8)));
-
-            expr = Parser::parse_expr_string("(8 + 2) * (3 - 1)").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(20)));
-
-            expr = Parser::parse_expr_string("-5 + 3").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(-2)));
-
-            expr = Parser::parse_expr_string("!true").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Bool(false)));
-
-            expr = Parser::parse_expr_string("~15").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(!15)));
-
-            expr = Parser::parse_expr_string("7 & 3").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(3)));
-
-            expr = Parser::parse_expr_string("12 | 5").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(13)));
-
-            expr = Parser::parse_expr_string("9 ^ 6").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(15)));
-
-            expr = Parser::parse_expr_string("4 << 2").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(16)));
-
-            expr = Parser::parse_expr_string("16 >> 1").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(8)));
-
-            expr = Parser::parse_expr_string("-(-10)").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(10)));
-
-            expr = Parser::parse_expr_string("!(false)").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Bool(true)));
-
-            expr = Parser::parse_expr_string("~~7").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(7)));
-
-            expr = Parser::parse_expr_string("(5 + 3) & (2 * 4)").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(8)));
-
-            expr = Parser::parse_expr_string("100 / 10 + 5 * 2").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(20)));
-
-            expr = Parser::parse_expr_string("(20 - 5) * (3 + 2) / 5").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(15)));
-
-            expr = Parser::parse_expr_string("14 % 3").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(2)));
-
-            expr = Parser::parse_expr_string("-10 % 3").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(2)));
-
-            expr = Parser::parse_expr_string("5.5 + 2.5").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Float(8.0)));
-
-            expr = Parser::parse_expr_string("10.0 / 4.0").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Float(2.5)));
-
-            expr = Parser::parse_expr_string("3 + 4.5").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Float(7.5)));
-
-            expr = Parser::parse_expr_string("2.5 * 2").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Float(5.0)));
-
-            expr = Parser::parse_expr_string("!(5 > 3)").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Bool(false)));
-
-            expr = Parser::parse_expr_string("10 & ~5").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(10)));
-
-            expr = Parser::parse_expr_string("(8 << 1) | (4 >> 1)").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(18)));
-
-            expr = Parser::parse_expr_string("-5 * -3").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(15)));
-        }
-
-        #[test]
-        fn newline_exprs() {
-            let mut expr;
-            let mut ans;
-
-            expr = Parser::parse_expr_string("5 +\n3").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(5 + 3)));
-
-            expr = Parser::parse_expr_string("10 -\n4 /\n2").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(10 - 4 / 2)));
-
-            expr = Parser::parse_expr_string("(8 +\n2) * (3\n- 1)").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int((8 + 2) * (3 - 1))));
-
-            expr = Parser::parse_expr_string("-5\n+ 3").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(-5))); // newline should ignore the rest
-
-            expr = Parser::parse_expr_string("-5 \\ \n+ 3").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(-5 + 3))); // backslash ignores newline
-
-            expr = Parser::parse_expr_string("!true\n|| false").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Bool(!true || false)));
-
-            expr = Parser::parse_expr_string("7 &\n3").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(7 & 3)));
-
-            expr = Parser::parse_expr_string("12 |\n5\n^ 6").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(12 | 5)));
-
-            // 12 |
-            // (5
-            //    ^ 6)
-            expr = Parser::parse_expr_string("12 |\n(5\n^ 6)").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(12 | (5 ^ 6))));
-
-            expr = Parser::parse_expr_string("12 |\n5 ^\n6").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(12 | 5 ^ 6)));
-
-            expr = Parser::parse_expr_string("4 << \n 2").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(4 << 2)));
-
-            expr = Parser::parse_expr_string("~15\n& 7").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(!15)));
-
-            expr = Parser::parse_expr_string("(~15\n& 7)").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(!15 & 7)));
-
-            expr = Parser::parse_expr_string("-(-10)\n+ 5").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(-(-10))));
-
-            expr = Parser::parse_expr_string("!(false)\n&& true").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Bool(!(false) && true)));
-
-            expr = Parser::parse_expr_string("(5 +\n3) &\n(2\n*\n4)").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int((5 + 3) & (2 * 4))));
-
-            expr = Parser::parse_expr_string("100\n/\n10\n+\n5 * 2").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(100)));
-
-            expr = Parser::parse_expr_string("(100\n/\n10\n+\n5 * 2)").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(100 / 10 + 5 * 2)));
-
-            expr = Parser::parse_expr_string("1 == 0 ? 1\n : 2").unwrap();
-            ans = evaluate_static(&expr);
-            assert!(matches!(ans, Ok(TypedValue::Int(2))));
-
-            expr = Parser::parse_expr_string("true ? 5\n: 10").unwrap();
-            ans = evaluate_static(&expr);
-            assert_eq!(ans, Ok(TypedValue::Int(5)));
         }
     }
 }
