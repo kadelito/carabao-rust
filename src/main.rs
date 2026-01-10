@@ -1,9 +1,10 @@
+#[allow(unused)]
+
 mod analysis;
 mod codegen;
 mod debug;
 mod errors;
 mod expr_ast;
-#[allow(unused)]
 mod lexing;
 mod parsing;
 mod runtime;
@@ -11,7 +12,6 @@ mod standard_library;
 mod stmt_ast;
 mod values;
 mod types;
-mod standard_library;
 
 use std::{env, fs, process};
 

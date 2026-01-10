@@ -19,8 +19,6 @@ pub enum ValueType {
     String,
     // my god they're generic
     Range(Box<ValueType>),
-    // my god they're generic
-    Range(Box<ValueType>),
     Function(Box<FunctionType>),
     UserType(Token),
     Object(Box<ObjectType>),

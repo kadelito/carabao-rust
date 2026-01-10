@@ -390,10 +390,6 @@ impl Generator {
         let start = self.context.function.code.len();
         self.context.loop_starts.push(start);
         start
-    fn begin_loop(&mut self) -> usize {
-        let start = self.context.function.code.len();
-        self.context.loop_starts.push(start);
-        start
     }
 
     /// Uses the current length as the loop end index,

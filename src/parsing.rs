@@ -410,7 +410,6 @@ impl<'a> Parser<'a> {
     fn comparison(&mut self) -> Expr {
         self.left_assoc_bin_series(
             Parser::range,
-            Parser::range,
             &[
                 TokenType::Less,
                 TokenType::LessEqual,
