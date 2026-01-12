@@ -18,7 +18,7 @@ pub fn analyze(program: &Vec<Stmt>) -> Result<AnalysisResult, Vec<UsageError>> {
             (*name).to_owned(),
             if name.is_empty() {
                 // these will never appear in user code, just here to preserve spacing
-                ValueType::None
+                ValueType::Unchecked
             } else {
                 obj.get_type()
             },
@@ -59,6 +59,7 @@ pub enum Binding {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum UsageError {
     TypeError,
+    ReturnError,
     TypeDoesntExist,
     UndefinedIdent,
     InvalidAssign,
@@ -286,7 +287,7 @@ impl<'me, 'ast> Resolver<'ast> {
         ValueType::Unchecked
     }
 
-    fn error_at_expr(&mut self, _expr: &Expr, reason: UsageError) -> ValueType {
+    fn error_at_expr(&mut self, expr: &Expr, reason: UsageError) -> ValueType {
         // TODO actual error locating
         eprintln!(
             "[unfinished] Error on line {}: {:?}",
@@ -474,7 +475,7 @@ impl<'ast> StmtVisitor<'ast, ()> for Resolver<'ast> {
         self.declare(
             name.copy_ident(),
             FunctionType {
-                ret_type: ValueType::UserType(name.clone()),
+                ret_type: ValueType::UserType(name.clone().into()),
                 native: true,
                 params: fields
                     .iter()
@@ -576,13 +577,13 @@ impl<'ast> StmtVisitor<'ast, ()> for Resolver<'ast> {
         self.exit_scope();
     }
 
-    fn visit_keyword_stmt(&mut self, keyword: &Token, arg: Option<&Expr>) {
+    fn visit_keyword_stmt(&mut self, keyword: &Token, return_arg: Option<&Expr>) {
         self.update_loc(keyword);
 
         match keyword.kind() {
             TokenType::Break | TokenType::Continue => {
                 let mut loops_to_jump = 1;
-                if let Some(arg) = arg {
+                if let Some(arg) = return_arg {
                     let Expr::Literal { val, .. } = arg else {
                         self.error_at_expr(arg, UsageError::InvalidLoopControl);
                         return;
@@ -603,18 +604,12 @@ impl<'ast> StmtVisitor<'ast, ()> for Resolver<'ast> {
             }
             TokenType::Return => {
                 let ret_type = self.context.ret_type.clone();
-                if let Some(arg) = arg {
+                if let Some(arg) = return_arg {
                     self.expect_type(&ret_type, arg);
                 } else {
-                    // cheat a little bit and fake an expression
-                    self.expect_type(
-                        &ret_type,
-                        &Expr::Literal {
-                            repr: keyword.clone(),
-                            val: TypedValue::None,
-                            id: 0,
-                        },
-                    );
+                    if !ValueType::can_convert_type(&ret_type, &ValueType::None) {
+                        self.error_at_token(keyword, UsageError::ReturnError);
+                    }
                 }
             }
             _ => panic!("Invalid token for keyword statement made it to analysis"),
@@ -936,7 +931,8 @@ impl<'ast> ExprVisitor<'_, ValueType> for Resolver<'ast> {
                     | ValueType::String
                     | ValueType::Range(_)
                     | ValueType::List(_)
-                    | ValueType::UserType(_) => {
+                    | ValueType::UserType(_) 
+                    | ValueType::Object(_) => {
                         self.error_at_expr(callee, UsageError::CantCallThat)
                     }
                     ValueType::Function(func_type) => {
@@ -954,7 +950,6 @@ impl<'ast> ExprVisitor<'_, ValueType> for Resolver<'ast> {
                         }
                         ret_type
                     }
-                    ValueType::Object(obj_type) => todo!("Overload calling?"),
                 }
             }
         }
@@ -965,7 +960,7 @@ impl<'ast> ExprVisitor<'_, ValueType> for Resolver<'ast> {
 
         match self.get_identifier(identifier.lexeme()) {
             Some((binding, data)) => {
-                let mut var_type = data.val_type.clone();
+                let var_type = data.val_type.clone();
                 self.final_data.bindings.insert(id, binding);
                 var_type
             }

@@ -32,7 +32,7 @@ impl<'a> From<Lexer<'a>> for Parser<'a> {
     fn from(token_source: Lexer<'a>) -> Self {
         Parser {
             source: token_source,
-            cur: Token::dummy(),
+            cur: Token::default(),
             prev: None,
             ignore_newlines: false,
             next_id: 0,
@@ -91,14 +91,16 @@ impl<'a> Parser<'a> {
         let name = self.expect_binding();
         self.expect(TokenType::OpenBrace);
         let mut fields = Vec::new();
-        while !self.at_end() {
-            let field_type = self.expect_type();
-            let field = self.expect_binding();
-            fields.push((field, field_type));
-            // TODO change this if we need some delimiter
-            self.skip_newlines();
-            if self.try_consume(TokenType::CloseBrace) {
-                break;
+        if !self.try_consume(TokenType::CloseBrace) {
+            while !self.at_end() {
+                let field_type = self.expect_type();
+                let field = self.expect_binding();
+                fields.push((field, field_type));
+                // TODO change this if we need a delimiter
+                self.skip_newlines();
+                if self.try_consume(TokenType::CloseBrace) {
+                    break;
+                }
             }
         }
         self.user_types.insert(name.copy_ident());
@@ -129,7 +131,7 @@ impl<'a> Parser<'a> {
         };
         self.expect(TokenType::OpenBrace);
         let Stmt::Block { statements } = self.block() else {
-            return Stmt::dummy();
+            return Stmt::default();
         };
         Stmt::Function {
             ret_type,
@@ -215,7 +217,7 @@ impl<'a> Parser<'a> {
             self.block()
         } else {
             self.error_at_next(ParseError::NoStatement);
-            Stmt::dummy()
+            Stmt::default()
         };
         let true_branch = Box::new(true_branch);
 
@@ -240,7 +242,7 @@ impl<'a> Parser<'a> {
             self.block()
         } else {
             self.error_at_next(ParseError::NoStatement);
-            Stmt::dummy()
+            Stmt::default()
         };
         let body = Box::new(body);
         Stmt::While { condition, body }
@@ -256,7 +258,7 @@ impl<'a> Parser<'a> {
             self.block()
         } else {
             self.error_at_next(ParseError::NoStatement);
-            Stmt::dummy()
+            Stmt::default()
         };
         let body = Box::new(body);
 
@@ -319,7 +321,6 @@ impl<'a> Parser<'a> {
         if self.try_consume_any(&[TokenType::Equal]) {
             let op = self.take_prev();
             let assignee = Box::new(expr);
-            let value = Box::new(self.expression(false));
             let value = Box::new(self.expression(false));
             expr = Expr::Assign {
                 assignee,
@@ -621,7 +622,7 @@ impl<'a> Parser<'a> {
                 }
                 Err(e) => {
                     self.error_at(&literal, e);
-                    return Expr::dummy();
+                    return Expr::default();
                 }
             }
         } else if self.try_consume(TokenType::StringLiteral) {
@@ -713,7 +714,7 @@ impl<'a> Parser<'a> {
             todo!("Anonymous functions/lambdas")
         }
         self.error_at_next(ParseError::NoExpression);
-        Expr::dummy()
+        Expr::default()
     }
 }
 
@@ -783,7 +784,7 @@ impl<'a> Parser<'a> {
             },
             Err(e) => {
                 self.error_at(&literal, e);
-                Expr::dummy()
+                Expr::default()
             }
         }
     }
@@ -934,7 +935,7 @@ impl<'a> Parser<'a> {
     }
 
     fn take_prev(&mut self) -> Token {
-        self.prev.take().unwrap_or(Token::dummy())
+        self.prev.take().unwrap_or_default()
     }
 
     // so i dont accidentally overwrite cur or something. more readable too probably
@@ -944,9 +945,7 @@ impl<'a> Parser<'a> {
 
     // Advances until pointing at a non-error token.
     fn advance(&mut self) -> &Token {
-        // dark magic to allow moving out of self.cur
-        // basically self.prev = self.cur.take()
-        self.prev = Some(std::mem::replace(&mut self.cur, Token::dummy()));
+        self.prev = Some(std::mem::take(&mut self.cur));
 
         loop {
             self.cur = self.source.scan_token();
@@ -1035,13 +1034,13 @@ mod parsing_tests {
     #[test]
     fn helpers() {
         let mut tester = Parser::from(Lexer::new("1 2 3"));
-        assert_eq!(tester.cur, Token::dummy());
+        assert_eq!(tester.cur, Token::default());
         assert_eq!(tester.prev, None);
         tester.advance(); // advances to 1
         //  [1][2][3]
         //...^
         assert_eq!(tester.cur, make_token("1", 1));
-        assert_eq!(tester.prev, Some(Token::dummy()));
+        assert_eq!(tester.prev, Some(Token::default()));
         assert!(tester.check(TokenType::DecIntLiteral));
         assert!(tester.try_consume(TokenType::DecIntLiteral)); // advances to 2
         assert!(tester.check(TokenType::DecIntLiteral));

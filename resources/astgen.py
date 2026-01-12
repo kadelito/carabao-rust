@@ -101,15 +101,21 @@ def generate(name: str, desc: str, add_id = False):
         print( " },")
     print( "}")
     print()
+    
+    # =================== IMPL DEFAULT ===================
+    print(f"impl Default for {name} {{")
+    print(f"    /// Returns a dummy value when a{str_if('n'), name[0].lower() in "aeiou"} {name} is expected but some error occured.")
+    print(f"    /// It is expected that this {name} never actually gets examined.")
+    print( "    fn default() -> Self {")
+    print( "        ")
+    print( "    }")
+    print( "}")
+    print()
 
     # =================== IMPL ===================
-    # define .dummy() and .accept() for each of the enum's variants via `match`
+    # define .accept() for each of the enum's variants via `match`
     # if the enum has an `id` field, return it from each variant
     print(f"impl<'me, 'vis> {name} where 'me: 'vis {{")
-    print(f"    pub fn dummy() -> Self {{")
-    print(f"        Self::todo!()")
-    print(f"    }}")
-    print(f"    ")
     if add_id:
         print(f"    pub fn id(&self) -> usize {{")
         print(f"        match self {{")

@@ -17,10 +17,6 @@ pub enum Stmt {
 }
 
 impl<'me, 'vis> Stmt where 'me: 'vis {
-    pub fn dummy() -> Self {
-        Self::Block { statements: vec![] }
-    }
-
     pub fn accept<T>(&'me self, visitor: &mut impl StmtVisitor<'vis, T>) -> T {
         match self {
             Self::Struct { name, fields } =>
@@ -69,6 +65,14 @@ impl<'me, 'vis> Stmt where 'me: 'vis {
             Self::Keyword { keyword, arg } =>
                 invader.invade_keyword_stmt(keyword, arg.as_deref_mut()),
         }
+    }
+}
+
+impl Default for Stmt {
+    /// Returns a dummy value when a Stmt is expected but some error occured.
+    /// It is expected that this Stmt never actually gets examined.
+    fn default() -> Self {
+        Self::Block { statements: vec![] }
     }
 }
 

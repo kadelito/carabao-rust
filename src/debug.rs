@@ -1,16 +1,11 @@
-use std::mem::discriminant;
-
 use crate::expr_ast::*;
-use crate::lexing::*;
 use crate::values::*;
 use crate::stmt_ast::*;
-use crate::types::*;
 
 pub mod opcodes {
-    use crate::{registry::GLOBAL_FUNCS, codegen::OpCode, types::ValueType, values::{TypedFunction, TypedValue}};
+    use crate::{registry::GLOBAL_FUNCS, codegen::OpCode, values::{TypedFunction, TypedValue}};
 
     pub fn disassemble(func: &TypedFunction) {
-        
         // like 'pow(float, int): float'
         let sig = format!("{}({}): {:?}",
             func.name,

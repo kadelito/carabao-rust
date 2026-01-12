@@ -14,8 +14,6 @@ use crate::{
     types::*,
     values::*,
 };
-#[cfg(feature = "debug")]
-use crate::debug::opcodes::disassemble;
 
 #[derive(Debug, TryFromPrimitive, IntoPrimitive)]
 #[repr(u8)]
@@ -108,8 +106,7 @@ pub fn generate(ast: &Vec<Stmt>, context: AnalysisResult) -> TypedFunction {
                 String::new(),
                 Box::new([]), // string[] argv?
                 ValueType::None,
-            ),
-            true,
+            )
         ),
     };
     for stmt in ast {
@@ -135,18 +132,16 @@ struct FunctionContext {
     stack_size: usize,
     loop_starts: Vec<usize>,
     break_backlog: Vec<(usize, i64)>, // jumps index & loops to break
-    is_main: bool,
     function: TempFunction,
     prev_line: u32,
 }
 
 impl FunctionContext {
-    fn new(function: TempFunction, is_main: bool) -> Self {
+    fn new(function: TempFunction) -> Self {
         Self {
             stack_size: 0,
             loop_starts: Vec::new(),
             break_backlog: Vec::new(),
-            is_main,
             function,
             prev_line: 0,
         }
@@ -429,11 +424,9 @@ impl Generator {
             self.code_expr_as_is(expr);
             self.write_instr(code);
         } else if *expected == ValueType::String {
-            // No string cast, so we call __str instead
-            self.write_instr(OpCode::GetGlobal);
-            let to_string_index = BUILTIN_FUNC_INDICES["str"];
-            self.write_byte(to_string_index as u8);
-            self.code_expr_as_is(expr);
+            // Convert to string
+            self.write_native("str");
+            self.code_expr_into(&ValueType::Any, expr);
             self.write_instr(OpCode::CallNative);
             self.write_byte(1);
         } else {
@@ -486,7 +479,7 @@ where
         );
 
         let old_context =
-            std::mem::replace(&mut self.context, FunctionContext::new(new_func, false));
+            std::mem::replace(&mut self.context, FunctionContext::new(new_func));
 
         for stmt in body {
             self.code_stmt(stmt);
@@ -601,7 +594,7 @@ where
 
         let old_size = self.context.stack_size;
 
-        todo!(); // python-style iterators
+        todo!(); // TODO python-style iterators
 
         while self.context.stack_size > old_size {
             // pop locals
@@ -710,8 +703,6 @@ impl ExprVisitor<'_, ()> for Generator {
         id: usize,
     ) {
         self.update_loc(op);
-
-        let before_operands = self.context.function.code.len();
 
         let both = self
             .bin_types
@@ -846,7 +837,6 @@ impl ExprVisitor<'_, ()> for Generator {
                 let Binding::Stack(index) = self.bindings[&get_id] else {
                     internal_error!("Field index not stored for set expression")
                 };
-                self.code_expr_as_is(obj);
                 self.write_instr(OpCode::FieldSet);
                 self.write_byte(index as u8);
             }
@@ -1018,8 +1008,8 @@ impl ExprVisitor<'_, ()> for Generator {
                 // left is true, push right
                 self.code_expr_into(&ValueType::Bool, right);
                 let end_jump = self.write_jump(OpCode::Jump);
+                // left is false, jumped to false
                 self.patch_jump_to_next(skip_right);
-                // left is false, jump to false
                 self.write_instr(OpCode::False);
                 self.patch_jump_to_next(end_jump);
             }
@@ -1029,8 +1019,8 @@ impl ExprVisitor<'_, ()> for Generator {
                 // left is true, push true
                 self.write_instr(OpCode::True);
                 let end_jump = self.write_jump(OpCode::Jump);
+                // left is false, jumped to right
                 self.patch_jump_to_next(goto_right);
-                // left is false, jump to right
                 self.code_expr_into(&ValueType::Bool, right);
                 self.patch_jump_to_next(end_jump);
             }

@@ -382,6 +382,7 @@ impl<'a> Lexer<'a> {
         while self.peek().is_digit(base) {
             self.advance();
         }
+        // handles the 10.method() case
         let is_float = self.peek() == '.' && self.peek_ahead(1).is_ascii_digit();
         let kind;
         if is_float {
@@ -600,17 +601,6 @@ impl Debug for Token {
 
 /// Getters for Token
 impl Token {
-    pub fn dummy() -> Self {
-        Token {
-            kind: TokenType::Error,
-            lexeme: None,
-            loc: TokenLocation {
-                line: u32::MAX,
-            },
-            error: Some(TokenizationError::EmptyToken)
-        }
-    }
-
     pub fn kind(&self) -> TokenType {
         self.kind
     }
@@ -641,6 +631,19 @@ impl Token {
 
     pub fn error(&self) -> Option<TokenizationError> {
         self.error
+    }
+}
+
+impl Default for Token {
+    fn default() -> Self {
+        Self {
+            kind: TokenType::Error,
+            lexeme: None,
+            loc: TokenLocation {
+                line: u32::MAX,
+            },
+            error: Some(TokenizationError::EmptyToken)
+        }
     }
 }
 

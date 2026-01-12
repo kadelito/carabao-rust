@@ -5,22 +5,22 @@ use std::{
     u32,
 };
 
+use thin_dst::{ThinData, ThinRc};
+
 use crate::types::*;
 use crate::{
     codegen::LineRLE,
     errors::macros::internal_error,
 };
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(PartialEq, Clone)]
 pub enum TypedValue {
     Any(Box<TypedValue>),
     Int(i64),
     Float(f64),
     Char(char),
     Bool(bool),
-    // Double pointer avoids Rc being fat
-    // sorry cache :3
-    String(Rc<Box<[u16]>>),
+    String(ThinRc<(), u16>),
     Range(Rc<(TypedValue, TypedValue)>),
     Function(Rc<TypedFunction>),
     NativeFunc(Rc<TypedNativeFunction>),
@@ -29,120 +29,22 @@ pub enum TypedValue {
     None,
 }
 
-#[derive(Debug)]
-pub struct MutRc<T: ?Sized> {
-    inner: Rc<UnsafeCell<T>>,
-}
-
-impl<T: ?Sized> MutRc<T> {
-    pub fn get(&self) -> &T {
-        unsafe { &*self.inner.get() }
-    }
-
-    pub fn get_mut(&self) -> &mut T {
-        unsafe { &mut *self.inner.get() }
-    }
-}
-
-impl<T: ?Sized> From<Box<T>> for MutRc<T> {
-    fn from(value: Box<T>) -> Self {
-        Self {
-            inner: {
-                let ptr = unsafe { &mut *Box::into_raw(value) };
-                let cell = UnsafeCell::from_mut(ptr);
-                let boxed = unsafe { Box::from_raw(cell) };
-                boxed.into()
-            },
-        }
-    }
-}
-
-// Sized version with much fewer
-impl<T: Sized> From<T> for MutRc<T> {
-    fn from(value: T) -> Self {
-        Self {
-            inner: Rc::new(UnsafeCell::new(value)),
-        }
-    }
-}
-
-impl<T: ?Sized> PartialEq for MutRc<T> {
-    fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.inner, &other.inner)
-    }
-}
-
-impl<T: ?Sized> Clone for MutRc<T> {
-    fn clone(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
-        }
-    }
-}
-
-#[derive(PartialEq)]
-pub struct TypedFunction {
-    pub name: Box<str>,
-    pub params: Box<[ValueType]>,
-    pub ret_type: ValueType,
-    pub constants: Box<[TypedValue]>,
-    pub code: Box<[u8]>,
-    pub lines: Box<[LineRLE]>,
-}
-
-impl TypedFunction {
-    pub fn get_line(&self, index: usize) -> u32 {
-        if index == 0 {
-            return self.lines[0].line;
-        }
-
-        let mut bytes_passed: usize = 0;
-        for info in &self.lines {
-            bytes_passed += info.count as usize;
-            if bytes_passed > index {
-                return info.line;
-            }
-        }
-        if index >= bytes_passed {
-            u32::MAX
-        } else {
-            return self.lines.last().unwrap().line;
-        }
-    }
-}
-impl Debug for TypedFunction {
+impl Debug for TypedValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Self {
-            name,
-            params,
-            ret_type,
-            ..
-        } = self;
-        // so func sqrt[float]: sqrt
-        write!(f, "{:?}{:?} -> {:?}", name, params, ret_type,)
-    }
-}
-
-#[derive(PartialEq)]
-pub struct TypedNativeFunction {
-    pub name: &'static str,
-    pub params: &'static [ValueType],
-    pub ret_type: ValueType,
-    pub func: fn(&[TypedValue]) -> TypedValue,
-    // TODO replace native with result
-    // pub func: fn(&[TypedValue]) -> Result<TypedValue, RuntimeError>,
-}
-
-impl Debug for TypedNativeFunction {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Self {
-            name,
-            params,
-            ret_type,
-            ..
-        } = self;
-        // so func sqrt[float]: sqrt
-        write!(f, "{:?}{:?} -> {:?}", name, params, ret_type,)
+        match self {
+            Self::Any(arg0) => f.debug_tuple("Any").field(arg0).finish(),
+            Self::Int(arg0) => f.debug_tuple("Int").field(arg0).finish(),
+            Self::Float(arg0) => f.debug_tuple("Float").field(arg0).finish(),
+            Self::Char(arg0) => f.debug_tuple("Char").field(arg0).finish(),
+            Self::Bool(arg0) => f.debug_tuple("Bool").field(arg0).finish(),
+            Self::String(_) => write!(f, "String(\"{}\")", self), // pass it to Display
+            Self::Range(arg0) => f.debug_tuple("Range").field(arg0).finish(),
+            Self::Function(arg0) => f.debug_tuple("Function").field(arg0).finish(),
+            Self::NativeFunc(arg0) => f.debug_tuple("NativeFunc").field(arg0).finish(),
+            Self::List(arg0) => f.debug_tuple("List").field(arg0).finish(),
+            Self::Object(arg0) => f.debug_tuple("Object").field(arg0).finish(),
+            Self::None => write!(f, "None"),
+        }
     }
 }
 
@@ -152,10 +54,10 @@ impl Display for TypedValue {
             TypedValue::None => f.write_str("none"),
             TypedValue::Any(value) => Display::fmt(&value, f),
             TypedValue::Int(i) => f.write_str(&i.to_string()),
-            TypedValue::Float(flt) => write!(f, "{:.}", flt),
+            TypedValue::Float(flt) => write!(f, "{:.1}", flt),
             TypedValue::Char(c) => f.write_char(*c),
             TypedValue::Bool(b) => f.write_str(if *b { "true" } else { "false" }),
-            TypedValue::String(s) => f.write_str(&String::from_utf16_lossy(&s)),
+            TypedValue::String(s) => f.write_str(&String::from_utf16_lossy(&s.slice)),
             TypedValue::Range(range) => {
                 let (start, end) = range.as_ref();
                 write!(f, "[{start}...{end}]")
@@ -179,7 +81,9 @@ impl Display for TypedValue {
             ),
             TypedValue::Object(obj) => write!(
                 f,
-                "{{{}}}",
+                // "<object at 0x{:X}>",
+                // (obj.get() as *const [TypedValue]).addr()
+                "{{ {} }}",
                 obj.get()
                     .iter()
                     .map(|v| v.to_string())
@@ -195,9 +99,8 @@ impl From<String> for TypedValue {
         let utf16_chars = value
             .encode_utf16()
             .collect::<Vec<u16>>()
-            .into_boxed_slice()
-            .into();
-        Self::String(utf16_chars)
+            .into_boxed_slice();
+        Self::String(ThinRc::new((), utf16_chars))
     }
 }
 
@@ -266,5 +169,129 @@ impl TypedValue {
             ),
             TypedValue::Object(_) => internal_error!("Runtime object does not know its fields"),
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct MutRc<T: ?Sized> {
+    inner: Rc<UnsafeCell<T>>,
+}
+
+impl<T: ?Sized> MutRc<T> {
+    pub fn get(&self) -> &T {
+        unsafe { &*self.inner.get() }
+    }
+
+    pub fn get_mut(&self) -> &mut T {
+        unsafe { &mut *self.inner.get() }
+    }
+}
+
+impl<T: ?Sized> From<Box<T>> for MutRc<T> {
+    fn from(value: Box<T>) -> Self {
+        Self {
+            inner: {
+                let ptr = unsafe { &mut *Box::into_raw(value) };
+                let cell = UnsafeCell::from_mut(ptr);
+                let boxed = unsafe { Box::from_raw(cell) };
+                boxed.into()
+            },
+        }
+    }
+}
+
+// Sized version that's actually safe
+impl<T: Sized> From<T> for MutRc<T> {
+    fn from(value: T) -> Self {
+        Self {
+            inner: Rc::new(UnsafeCell::new(value)),
+        }
+    }
+}
+
+impl<T: ?Sized> PartialEq for MutRc<T> {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.inner, &other.inner)
+    }
+}
+
+impl<T: ?Sized> Clone for MutRc<T> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+#[derive(PartialEq)]
+pub struct TypedFunction {
+    pub name: Box<str>,
+    pub params: Box<[ValueType]>,
+    pub ret_type: ValueType,
+    pub constants: Box<[TypedValue]>,
+    pub code: Box<[u8]>,
+    pub lines: Box<[LineRLE]>,
+}
+
+impl TypedFunction {
+    pub fn get_line(&self, index: usize) -> u32 {
+        if index == 0 {
+            return self.lines[0].line;
+        }
+
+        let mut bytes_passed: usize = 0;
+        for info in &self.lines {
+            bytes_passed += info.count as usize;
+            if bytes_passed > index {
+                return info.line;
+            }
+        }
+        if index >= bytes_passed {
+            u32::MAX
+        } else {
+            return self.lines.last().unwrap().line;
+        }
+    }
+}
+impl Debug for TypedFunction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            name,
+            params,
+            ret_type,
+            ..
+        } = self;
+        // so func sqrt[float]: sqrt
+        write!(f, "{:?}{:?} -> {:?}", name, params, ret_type,)
+    }
+}
+
+pub struct TypedNativeFunction {
+    pub name: &'static str,
+    pub params: &'static [ValueType],
+    pub ret_type: ValueType,
+    pub func: fn(&[TypedValue]) -> TypedValue,
+    // TODO replace native with result
+    // pub func: fn(&[TypedValue]) -> Result<TypedValue, RuntimeError>,
+}
+
+impl PartialEq for TypedNativeFunction {
+    fn eq(&self, other: &Self) -> bool {
+        // Native functions can't be created at runtime,
+        // so name uniqueness can be guaranteed probably
+        self.name == other.name
+    }
+}
+
+impl Debug for TypedNativeFunction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            name,
+            params,
+            ret_type,
+            ..
+        } = self;
+        // so func sqrt[float]: sqrt
+        write!(f, "{:?}{:?} -> {:?}", name, params, ret_type,)
     }
 }

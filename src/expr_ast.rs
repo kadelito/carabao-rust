@@ -21,10 +21,6 @@ pub enum Expr {
 }
 
 impl<'me, 'vis> Expr where 'me: 'vis {
-    pub fn dummy() -> Self {
-        Self::List { items: vec![], id: usize::MAX }
-    }
-
     pub fn id(&self) -> usize {
         match self {
             Self::Conditional { id, .. } => *id,
@@ -98,6 +94,14 @@ impl<'me, 'vis> Expr where 'me: 'vis {
             Self::Literal { repr, val, id } =>
                 invader.invade_literal_expr(repr, val, *id),
         }
+    }
+}
+
+impl Default for Expr {
+    /// Returns a 'dummy' value when an Expr is expected but some error occured.
+    /// It is expected that this Expr never actually gets examined.
+    fn default() -> Self {
+        Self::List { items: vec![], id: usize::MAX }
     }
 }
 

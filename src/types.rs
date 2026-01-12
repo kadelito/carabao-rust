@@ -1,5 +1,7 @@
 use std::{cell::RefCell, fmt::Display, rc::Rc};
 
+use thin_dst::ThinRc;
+
 use crate::{
     codegen::{LineRLE, OpCode},
     errors::macros::internal_error,
@@ -20,7 +22,7 @@ pub enum ValueType {
     // my god they're generic
     Range(Box<ValueType>),
     Function(Box<FunctionType>),
-    UserType(Token),
+    UserType(Box<Token>),
     Object(Box<ObjectType>),
     List(Box<ValueType>),
 }
@@ -115,7 +117,7 @@ impl ValueType {
             ValueType::Float => TypedValue::Float(0.0),
             ValueType::Char => TypedValue::Char('\0'),
             ValueType::Bool => TypedValue::Bool(false),
-            ValueType::String => TypedValue::String(Rc::new([].into())),
+            ValueType::String => TypedValue::String(ThinRc::new((), [])),
             ValueType::Range(t) => TypedValue::Range(Rc::new((t.dummy(), t.dummy()))),
             ValueType::Function(func) => {
                 let func = TypedFunction {
@@ -124,12 +126,11 @@ impl ValueType {
                     ret_type: func.ret_type.clone(),
                     constants: Box::new([func.ret_type.dummy()]),
                     code: vec![
-                        // return dummy value from constants
+                        // return a dummy constant to retain type soundness
                         OpCode::Constant.into(),
                         0,
                         OpCode::Return.into(),
-                    ]
-                    .into_boxed_slice(),
+                    ].into_boxed_slice(),
                     lines: Box::new([LineRLE { line: 0, count: 3 }]),
                 };
                 TypedValue::Function(Rc::new(func))
@@ -154,7 +155,7 @@ impl ValueType {
             TokenType::Bool => Some(Self::Bool),
             TokenType::String => Some(Self::String),
             TokenType::None => Some(Self::None),
-            TokenType::Identifier => Some(Self::UserType(token)),
+            TokenType::Identifier => Some(Self::UserType(token.into())),
             _ => None,
         }
     }

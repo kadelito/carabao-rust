@@ -91,6 +91,8 @@ pub mod lists {
 pub mod strings {
     use std::io::Write;
 
+    use thin_dst::ThinRc;
+
     use super::*;
 
     pub fn to_string(args: &[TypedValue]) -> TypedValue {
@@ -102,17 +104,17 @@ pub mod strings {
 
     pub fn len(args: &[TypedValue]) -> TypedValue {
         let s = val_into!(&args[0] => String);
-        TypedValue::Int(s.len() as i64)
+        TypedValue::Int(s.slice.len() as i64)
     }
 
     pub fn concat(args: &[TypedValue]) -> TypedValue {
-        let s1 = (**val_into!(&args[0] => String)).as_ref();
-        let s2 = (**val_into!(&args[1] => String)).as_ref();
-        TypedValue::String([s1, s2].concat().into_boxed_slice().into())
+        let s1 = &(**val_into!(&args[0] => String)).slice;
+        let s2 = &(**val_into!(&args[1] => String)).slice;
+        TypedValue::String(ThinRc::new((), [s1, s2].concat().into_boxed_slice()))
     }
 
     pub fn slice(args: &[TypedValue]) -> TypedValue {
-        let str = val_into!(&args[0] => String);
+        let str = &val_into!(&args[0] => String).slice;
         let (start, end) = {
             let range = val_into!(&args[1] => Range);
             let (start_val, end_val) = range.as_ref();
@@ -121,16 +123,35 @@ pub mod strings {
                 *val_into!(end_val => Int) as usize,
             )
         };
-        let sliced = (str[start..end].to_vec().into_boxed_slice()).into(); // idk what actually happens :3
+        // !! Slices create a new string
+        let sliced = ThinRc::new((), str[start..end].to_vec().into_boxed_slice());
         TypedValue::String(sliced)
     }
 
     pub fn index(args: &[TypedValue]) -> TypedValue {
         let utf16_char = {
-            let str = val_into!(&args[0] => String);
+            let str = &val_into!(&args[0] => String).slice;
             let index = *val_into!(&args[1] => Int);
             str[index as usize]
         };
         TypedValue::Char(unsafe { char::from_u32_unchecked(utf16_char as u32) })
+    }
+
+    /// Implemented natively for speed
+    pub fn split(args: &[TypedValue]) -> TypedValue {
+        let str = val_into!(&args[0] => String);
+        let delim = *val_into!(&args[1] => Char) as u32;
+        let mut list = Vec::new();
+        let mut temp = Vec::new();
+        for c in &str.slice {
+            if *c as u32 == delim {
+                list.push(TypedValue::String(ThinRc::new((), temp.into_boxed_slice())));
+                temp = Vec::new();
+            } else {
+                temp.push(*c);
+            }
+        }
+        list.push(TypedValue::String(ThinRc::new((), temp.into_boxed_slice())));
+        TypedValue::from(list)
     }
 }

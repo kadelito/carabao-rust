@@ -1,5 +1,3 @@
-#[allow(unused)]
-
 mod analysis;
 mod codegen;
 mod debug;
@@ -80,6 +78,16 @@ impl Config {
 mod main_tests {
     use super::*;
     use crate::values::TypedValue;
+
+    macro_rules! log {
+        ($val: expr) => {
+            {
+                let x = $val;
+                println!("{} = {}", stringify!($val), x);
+                x
+            }
+        };
+    }
 
     #[test]
     fn hello_world() {

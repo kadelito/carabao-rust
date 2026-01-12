@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::ProgramError;
@@ -53,22 +52,6 @@ macro_rules! vm_pop_val {
         }
     };
 }
-macro_rules! vm_peek_val {
-    ($vm: expr, $distance: expr, $variant: ident) => {{
-        let val = $vm.stack_peek($distance);
-        if let TypedValue::$variant(v) = val {
-            v
-        } else {
-            internal_error!(
-                "{} not at stack[top - {}] (found {}):\n{:?}",
-                stringify!($variant),
-                $distance,
-                val
-                $vm.stack
-            )
-        }
-    }};
-}
 
 pub fn interpret(src: &str) -> Result<(), ProgramError> {
     let parser = Parser::from(src);
@@ -83,6 +66,7 @@ pub fn interpret(src: &str) -> Result<(), ProgramError> {
     run(main_script)
 }
 
+#[cfg(test)]
 pub fn from(src: &str) -> Result<VM, ProgramError> {
     let parser = Parser::from(src);
     let stmts = parser
@@ -152,7 +136,7 @@ enum SuccessStatus {
 impl VM {
     pub fn new(function: TypedFunction) -> Self {
         let mut new = Self {
-            call_stack: Vec::with_capacity(64),
+            call_stack: Vec::with_capacity(VM_CALLS_CAPACITY),
             stack: Vec::with_capacity(VM_STACK_CAPACITY),
             #[cfg(feature = "runtime_trace")]
             prev_line: 0,
@@ -187,14 +171,17 @@ impl VM {
 
     #[cfg(not(test))]
     pub fn run(&mut self) -> Result<(), ProgramError> {
-        while self.cycle(&TypedValue::None)? == SuccessStatus::Continue {}
+        while self.cycle()? == SuccessStatus::Continue {}
         Ok(())
     }
 
     #[inline(always)]
     // this function will never be called outside of a loop so i just want to
-    fn cycle(&mut self, input: &TypedValue) -> Result<SuccessStatus, ProgramError> {
-        // Redefine macros to 'capture' self
+    fn cycle(&mut self,
+        #[cfg(test)]
+        input: &TypedValue
+    ) -> Result<SuccessStatus, ProgramError> {
+        // Redefine macros to use self as vm argument
         macro_rules! binary_op {
             ($variant: ident $op: tt: $to: ident) => {
                 vm_binary_op!(self, $variant, $op, $to)
@@ -218,11 +205,6 @@ impl VM {
         macro_rules! stack_peek {
             ($dist: expr) => {
                 vm_stack_peek!(self, $dist)
-            };
-        }
-        macro_rules! peek_val {
-            ($dist: expr, $variant: ident) => {
-                vm_peek_val(self, $dist, $variant)
             };
         }
 
@@ -255,10 +237,6 @@ impl VM {
             OpCode::None => self.stack.push(TypedValue::None),
             OpCode::True => self.stack.push(TypedValue::Bool(true)),
             OpCode::False => self.stack.push(TypedValue::Bool(false)),
-            OpCode::LoadByte => {
-                let int = self.read_byte().cast_signed() as i64;
-                self.stack.push(TypedValue::Int(int));
-            }
             OpCode::LoadByte => {
                 let int = self.read_byte().cast_signed() as i64;
                 self.stack.push(TypedValue::Int(int));
@@ -367,10 +345,6 @@ impl VM {
             OpCode::AnyToBool => unwrap_any!(Bool),
             OpCode::AnyToChar => unwrap_any!(Char),
             OpCode::AnyToString => unwrap_any!(String),
-            OpCode::AnyToFloat => unwrap_any!(Float),
-            OpCode::AnyToBool => unwrap_any!(Bool),
-            OpCode::AnyToChar => unwrap_any!(Char),
-            OpCode::AnyToString => unwrap_any!(String),
             OpCode::IntToFloat => {
                 let f = pop_val!(Int) as f64;
                 self.stack.push(TypedValue::Float(f));
@@ -432,12 +406,12 @@ impl VM {
                 GLOBAL_FUNCS.len() // crop out globals, we know they're there
             };
             println!(
-                "   : |\tS=[{}]<-",
+                "   : |\tS=[ {} ]<-",
                 &self.stack[bottom..]
                     .iter()
                     .map(|v| format!("{}", v))
                     .collect::<Vec<String>>()
-                    .join("] [")
+                    .join(", ")
             );
         }
         Ok(SuccessStatus::Continue)
@@ -448,7 +422,12 @@ impl VM {
     }
 
     fn runtime_error(&mut self, reason: RuntimeError) -> ProgramError {
-        eprintln!("Runtime error: {:?}", reason);
+        let code_index = self.top_frame().ip;
+        eprintln!(
+            "Runtime error at line {}: {:?}",
+            self.top_frame().function.get_line(code_index),
+            reason
+        );
         ProgramError::RuntimeError(reason)
     }
 

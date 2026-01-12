@@ -1,9 +1,7 @@
 use std::{cell::{LazyCell}, collections::HashMap, rc::Rc};
 
 use crate::{
-    standard_library::*, 
-    types::ValueType,
-    values::*,
+    errors::macros::internal_error, standard_library::*, types::ValueType, values::*
 };
 
 pub mod macros {
@@ -22,11 +20,11 @@ pub mod macros {
 
 macro_rules! native_func {
     // with accessible identifier
-    ($ident_str: expr, $func_ptr: path as func($($params: ident),*) : $ret_type: ident) => {
+    ($ident_str: expr, $func_ptr: path as func($($params: expr),*) : $ret_type: expr) => {
         ($ident_str, TypedValue::NativeFunc(Rc::new(TypedNativeFunction {
             name: $ident_str,
-            params: &[$(ValueType::$params),*],
-            ret_type: ValueType::$ret_type,
+            params: &[$($params),*],
+            ret_type: $ret_type,
             func: $func_ptr,
         })))
     };
@@ -45,14 +43,16 @@ macro_rules! native_func {
 /// An array of functions and their identifiers, accessible in Carabao code.
 /// 
 /// Blank identifiers correspond to functions that can only be called implicitly.
-pub const GLOBAL_FUNCS: LazyCell<[(&'static str, TypedValue); 18]> = LazyCell::new(|| {
+pub const GLOBAL_FUNCS: LazyCell<[(&'static str, TypedValue); 19]> = LazyCell::new(|| {
+    use ValueType::*;
     [
         // native functions available to the user in global scope
         // the string arg refers to the identfier & internal name
         native_func!("print",   builtins::print as func(Any): None),
         native_func!("println", builtins::println  as func(Any): None),
         native_func!("clock",   builtins::clock as func(): Int),
-        native_func!("str",     iterables::strings::to_string as func(Any): String), // str(val) or val.str()
+        native_func!("str",     iterables::strings::to_string as func(Any): String),
+        native_func!("split",   iterables::strings::split as func(String, Char): List(String.into())),
 
         // ==============================================
         // internal, type-unchecked functions
@@ -70,7 +70,7 @@ pub const GLOBAL_FUNCS: LazyCell<[(&'static str, TypedValue); 18]> = LazyCell::n
         native_func!("list_index_set", iterables::lists::index_set),
         native_func!("new_list",       iterables::lists::new_list),
 
-        // TODO replace ranges with structs
+        // TODO replace ranges with structs?
         native_func!("new_range", iterables::ranges::new_range),
         native_func!("range_start", iterables::ranges::range_get_start),
         native_func!("range_end", iterables::ranges::range_get_end),
@@ -91,14 +91,10 @@ pub const GLOBAL_FUNCS: LazyCell<[(&'static str, TypedValue); 18]> = LazyCell::n
 /// located with their corresponding index in global slots.
 pub const BUILTIN_FUNC_INDICES: LazyCell<HashMap<&'static str, usize>> = LazyCell::new(|| {
     let mut map = HashMap::new();
-    for (index, (ident, val)) in GLOBAL_FUNCS.iter().enumerate() {
+    for (index, (_ident, val)) in GLOBAL_FUNCS.iter().enumerate() {
         match val {
             TypedValue::NativeFunc(func) => { map.insert(func.name,index); },
-            _ => {
-                // TODO replace with other things
-                assert!(!ident.is_empty());
-                assert_eq!(map.insert(ident, index), None);
-            }
+            _ => internal_error!("Other builtin entities not supported")
         }
     }
     map
