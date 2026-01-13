@@ -41,31 +41,6 @@ impl<'me, 'vis> Stmt where 'me: 'vis {
                 visitor.visit_keyword_stmt(keyword, arg.as_deref()),
         }
     }
-
-    pub fn yield_to<T>(&'me mut self, invader: &mut impl StmtInvader<'vis, T>) -> T {
-        match self {
-            Self::Struct { name, fields } =>
-                invader.invade_struct_stmt(name, fields),
-            Self::Function { ret_type, name, params, body } =>
-                invader.invade_function_stmt(ret_type, name, params, body),
-            Self::Summon { path, alias, id } =>
-                invader.invade_summon_stmt(path, alias.as_mut(), *id),
-            Self::Var { name, var_type, val } =>
-                invader.invade_var_stmt(name, var_type.as_mut(), val.as_deref_mut()),
-            Self::Block { statements } =>
-                invader.invade_block_stmt(statements),
-            Self::Expression { expression } =>
-                invader.invade_expression_stmt(expression.as_mut()),
-            Self::If { condition, true_branch, false_branch } =>
-                invader.invade_if_stmt(condition.as_mut(), true_branch.as_mut(), false_branch.as_deref_mut()),
-            Self::While { condition, body } =>
-                invader.invade_while_stmt(condition.as_mut(), body.as_mut()),
-            Self::For { var, sequence, body } =>
-                invader.invade_for_stmt(var, sequence.as_mut(), body.as_mut()),
-            Self::Keyword { keyword, arg } =>
-                invader.invade_keyword_stmt(keyword, arg.as_deref_mut()),
-        }
-    }
 }
 
 impl Default for Stmt {
@@ -97,28 +72,4 @@ pub trait StmtVisitor<'ast, T> {
         var: &'ast Token, sequence: &'ast Expr, body: &'ast Stmt) -> T;
     fn visit_keyword_stmt(&mut self,
         keyword: &'ast Token, arg: Option<&'ast Expr>) -> T;
-}
-
-/// A mutating Stmt visitor
-pub trait StmtInvader<'ast, T> {
-    fn invade_struct_stmt(&mut self,
-        name: &'ast mut Token, fields: &'ast mut Vec<(Token, ValueType)>) -> T;
-    fn invade_function_stmt(&mut self,
-        ret_type: &'ast mut ValueType, name: &'ast mut Token, params: &'ast mut Vec<(Token, ValueType)>, body: &'ast mut Vec<Stmt>) -> T;
-    fn invade_summon_stmt(&mut self,
-        path: &'ast mut Vec<Token>, alias: Option<&'ast mut Token>, id: usize) -> T;
-    fn invade_var_stmt(&mut self,
-        name: &'ast mut Token, var_type: Option<&'ast mut ValueType>, val: Option<&'ast mut Expr>) -> T;
-    fn invade_block_stmt(&mut self,
-        statements: &'ast mut Vec<Stmt>) -> T;
-    fn invade_expression_stmt(&mut self,
-        expression: &'ast mut Expr) -> T;
-    fn invade_if_stmt(&mut self,
-        condition: &'ast mut Expr, true_branch: &'ast mut Stmt, false_branch: Option<&'ast mut Stmt>) -> T;
-    fn invade_while_stmt(&mut self,
-        condition: &'ast mut Expr, body: &'ast mut Stmt) -> T;
-    fn invade_for_stmt(&mut self,
-        var: &'ast mut Token, sequence: &'ast mut Expr, body: &'ast mut Stmt) -> T;
-    fn invade_keyword_stmt(&mut self,
-        keyword: &'ast mut Token, arg: Option<&'ast mut Expr>) -> T;
 }

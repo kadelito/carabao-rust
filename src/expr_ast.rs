@@ -66,35 +66,6 @@ impl<'me, 'vis> Expr where 'me: 'vis {
                 visitor.visit_literal_expr(repr, val, *id),
         }
     }
-
-    pub fn yield_to<T>(&'me mut self, invader: &mut impl ExprInvader<'vis, T>) -> T {
-        match self {
-            Self::Conditional { condition, if_true, if_false, id } =>
-                invader.invade_conditional_expr(condition.as_mut(), if_true.as_mut(), if_false.as_mut(), *id),
-            Self::Boolean { left, op, right, id } =>
-                invader.invade_boolean_expr(left.as_mut(), op, right.as_mut(), *id),
-            Self::Binary { left, op, right, id } =>
-                invader.invade_binary_expr(left.as_mut(), op, right.as_mut(), *id),
-            Self::Assign { assignee, op, value, id } =>
-                invader.invade_assign_expr(assignee.as_mut(), op, value.as_mut(), *id),
-            Self::Cast { expr, new_type, id } =>
-                invader.invade_cast_expr(expr.as_mut(), new_type, *id),
-            Self::Unary { op, target, prefix, id } =>
-                invader.invade_unary_expr(op, target.as_mut(), prefix, *id),
-            Self::Slice { sequence, query, id } =>
-                invader.invade_slice_expr(sequence.as_mut(), query.as_mut(), *id),
-            Self::Call { callee, args, id } =>
-                invader.invade_call_expr(callee.as_mut(), args, *id),
-            Self::Get { obj, property, id } =>
-                invader.invade_get_expr(obj.as_mut(), property, *id),
-            Self::List { items, id } =>
-                invader.invade_list_expr(items, *id),
-            Self::Variable { identifier, id } =>
-                invader.invade_variable_expr(identifier, *id),
-            Self::Literal { repr, val, id } =>
-                invader.invade_literal_expr(repr, val, *id),
-        }
-    }
 }
 
 impl Default for Expr {
@@ -130,32 +101,4 @@ pub trait ExprVisitor<'ast, T> {
         identifier: &'ast Token, id: usize) -> T;
     fn visit_literal_expr(&mut self,
         repr: &'ast Token, val: &'ast TypedValue, id: usize) -> T;
-}
-
-/// A mutating Expr visitor
-pub trait ExprInvader<'ast, T> {
-    fn invade_conditional_expr(&mut self,
-        condition: &'ast mut Expr, if_true: &'ast mut Expr, if_false: &'ast mut Expr, id: usize) -> T;
-    fn invade_boolean_expr(&mut self,
-        left: &'ast mut Expr, op: &'ast mut Token, right: &'ast mut Expr, id: usize) -> T;
-    fn invade_binary_expr(&mut self,
-        left: &'ast mut Expr, op: &'ast mut Token, right: &'ast mut Expr, id: usize) -> T;
-    fn invade_assign_expr(&mut self,
-        assignee: &'ast mut Expr, op: &'ast mut Token, value: &'ast mut Expr, id: usize) -> T;
-    fn invade_cast_expr(&mut self,
-        expr: &'ast mut Expr, new_type: &'ast mut ValueType, id: usize) -> T;
-    fn invade_unary_expr(&mut self,
-        op: &'ast mut Token, target: &'ast mut Expr, prefix: &'ast mut bool, id: usize) -> T;
-    fn invade_slice_expr(&mut self,
-        sequence: &'ast mut Expr, query: &'ast mut Expr, id: usize) -> T;
-    fn invade_call_expr(&mut self,
-        callee: &'ast mut Expr, args: &'ast mut Vec<Expr>, id: usize) -> T;
-    fn invade_get_expr(&mut self,
-        obj: &'ast mut Expr, property: &'ast mut Token, id: usize) -> T;
-    fn invade_list_expr(&mut self,
-        items: &'ast mut Vec<Expr>, id: usize) -> T;
-    fn invade_variable_expr(&mut self,
-        identifier: &'ast mut Token, id: usize) -> T;
-    fn invade_literal_expr(&mut self,
-        repr: &'ast mut Token, val: &'ast mut TypedValue, id: usize) -> T;
 }

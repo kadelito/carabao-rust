@@ -74,7 +74,7 @@ mutborrowvar = lambda typ, name: (
     else name
 )
 
-def generate(name: str, desc: str, add_id = False):
+def generate(name: str, desc: str, add_id = False, invader = False):
     # remove comments
     desc = [l[:l.index("//") if "//" in l else len(l)] for l in desc.split("\n")]
     # split into [variant, fields]
@@ -140,23 +140,24 @@ def generate(name: str, desc: str, add_id = False):
         print( "),")
     print( "        }")
     print( "    }")
-    print( "    ")
-    print(f"    pub fn yield_to<T>(&'me mut self, invader: &mut impl {name}Invader<'vis, T>) -> T {{")
-    print( "        match self {")
-    for node in desc:
-        print( " "*12+f"Self::{node[0]} {{ ", end="")
-        for i, field in enumerate(node[1]):
-            print(f"{field[0]}", end="")
-            if i < len(node[1]) - 1:
-                print(end=", ")
-        print(f" }} =>\n{" "*16}invader.invade_{node[0].lower()}_{name.lower()}(",end="")
-        for i, field in enumerate(node[1]):
-            print(f"{mutborrowvar(field[1], field[0])}", end="")
-            if i < len(node[1]) - 1:
-                print(end=", ")
-        print( "),")
-    print( "        }")
-    print( "    }")
+    if invader:
+        print( "    ")
+        print(f"    pub fn yield_to<T>(&'me mut self, invader: &mut impl {name}Invader<'vis, T>) -> T {{")
+        print( "        match self {")
+        for node in desc:
+            print( " "*12+f"Self::{node[0]} {{ ", end="")
+            for i, field in enumerate(node[1]):
+                print(f"{field[0]}", end="")
+                if i < len(node[1]) - 1:
+                    print(end=", ")
+            print(f" }} =>\n{" "*16}invader.invade_{node[0].lower()}_{name.lower()}(",end="")
+            for i, field in enumerate(node[1]):
+                print(f"{mutborrowvar(field[1], field[0])}", end="")
+                if i < len(node[1]) - 1:
+                    print(end=", ")
+            print( "),")
+        print( "        }")
+        print( "    }")
     print( "}")
     print()
 
@@ -195,12 +196,12 @@ tree_to_generate = sys.argv[1].lower()
 print( "use crate::lexing::Token;")
 print( "use crate::types::*;")
 if tree_to_generate == "stmt":
-    print( "use crate::expr_ast::Expr;")
+    print("use crate::expr_ast::Expr;")
     print()
-    generate("Stmt", stmts, add_id=False)
+    generate("Stmt", stmts, add_id=False, invader=False)
 elif tree_to_generate == "expr":
-    print( "use crate::values::*;")
+    print("use crate::values::*;")
     print()
-    generate("Expr", exprs, add_id=True)
+    generate("Expr", exprs, add_id=True, invader=False)
 else:
     print( "\nnothing to generate")
