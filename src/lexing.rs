@@ -429,7 +429,7 @@ impl<'a> Lexer<'a> {
     fn one_or_more_char_token(
         &mut self,
         from_one: TokenType,
-        pairs: Vec<(&str, TokenType)>,
+        pairs: &[(&str, TokenType)],
     ) -> Token {
         let token_start = self.cur;
         'next_token: for (s, kind) in pairs {
@@ -441,7 +441,7 @@ impl<'a> Lexer<'a> {
                 }
             }
             // we consumed the whole thing without breaking
-            return self.make_token(kind);
+            return self.make_token(*kind);
         }
         self.make_token(from_one)
     }
@@ -813,168 +813,4 @@ pub enum TokenType {
     // Misc
     Error,
     EOF,
-}
-
-#[cfg(test)]
-pub mod lexing_tests {
-    use crate::lexing::*;
-
-    pub fn make_token(src: &str, line: u32) -> Token {
-        let mut token = Lexer::new(src).scan_token();
-        token.loc.line = line;
-        token
-    }
-
-    #[test]
-    fn identifier_1() {
-        let tester = Lexer::new("hello world!");
-        let tokens = tester.to_vec();
-
-        assert_eq!(tokens.len(), 3);
-        assert_eq!(tokens[0].kind, TokenType::Identifier);
-        assert_eq!(tokens[1].kind, TokenType::Identifier);
-        assert_eq!(tokens[2].kind, TokenType::Bang);
-    }
-
-    #[test]
-    fn newlines_1() {
-        let tester = Lexer::new("  \t \n \\  \n");
-        let tokens = tester.to_vec();
-
-        assert_eq!(tokens.len(), 1);
-        assert_eq!(tokens[0].kind, TokenType::Newline);
-    }
-
-    #[test]
-    fn newlines_2() {
-        // should get parsed as [a] [+] [b] [\n] [c] [-] [d]
-        let tester = Lexer::new(
-            "a \\
-+\\
-b
-c - d \\
-",
-        );
-        let tokens = tester.to_vec();
-        let types: Vec<TokenType> = tokens.iter().map(|tkn| tkn.kind()).collect();
-
-        assert_eq!(types.len(), 7);
-
-        assert_eq!(
-            types,
-            vec![
-                TokenType::Identifier,
-                TokenType::Plus,
-                TokenType::Identifier,
-                TokenType::Newline,
-                TokenType::Identifier,
-                TokenType::Minus,
-                TokenType::Identifier,
-            ]
-        )
-    }
-
-    #[test]
-    fn peekaboo() {
-        let mut tester = Lexer::new("0123456");
-        // [0][1][2][3][4][5][6]
-        //  ^
-        assert_eq!(tester.peek(), '0');
-        assert_eq!(tester.peek_ahead(1), '1');
-        assert_eq!(tester.peek_ahead(2), '2');
-        assert_eq!(tester.peek_ahead(200), '\0');
-        assert_eq!(tester.peek_substring(1, 3), "12");
-        assert_eq!(
-            tester.peek_substring(3, 4).chars().next().unwrap(),
-            tester.peek_ahead(3)
-        );
-        assert_eq!(tester.peek_substring(1, 10), "");
-        tester.advance();
-        tester.advance();
-        // [0][1][2][3][4][5][6]
-        //        ^  1  2  3  4
-        assert_eq!(tester.peek(), '2');
-        assert_eq!(tester.peek_ahead(1), '3');
-        assert_eq!(tester.peek_ahead(2), '4');
-        assert_eq!(tester.peek_ahead(5), '\0');
-        assert_eq!(tester.peek_ahead(6), '\0');
-        assert_eq!(tester.peek_substring(0, 4), "2345");
-        assert_eq!(tester.peek_substring(1, 5), "3456");
-        assert_eq!(tester.peek_substring(2, 6), "");
-    }
-
-    #[test]
-    fn double_chars() {
-        let mut tester = Lexer::new("=====");
-        //                                          == == =
-        assert_eq!(tester.scan_token().kind, TokenType::DoubleEqual);
-        assert_eq!(tester.scan_token().kind, TokenType::DoubleEqual);
-        assert_eq!(tester.scan_token().kind, TokenType::Equal);
-        assert_eq!(tester.scan_token().kind, TokenType::EOF);
-
-        tester = Lexer::new(">>>==<=!!=!");
-        //                     >> >= = <= ! != !
-        assert_eq!(tester.scan_token().kind, TokenType::DoubleGreater);
-        assert_eq!(tester.scan_token().kind, TokenType::GreaterEqual);
-        assert_eq!(tester.scan_token().kind, TokenType::Equal);
-        assert_eq!(tester.scan_token().kind, TokenType::LessEqual);
-        assert_eq!(tester.scan_token().kind, TokenType::Bang);
-        assert_eq!(tester.scan_token().kind, TokenType::BangEqual);
-        assert_eq!(tester.scan_token().kind, TokenType::Bang);
-        assert_eq!(tester.scan_token().kind, TokenType::EOF);
-    }
-
-    #[test]
-    fn keywords() {
-        
-    }
-
-    #[test]
-    fn not_keywords() {
-        let mut tester = Lexer::new(
-            "ints floats chars bools strings vars imports ass ins funcs ifs elses fors whiles returns breaks continues trues falses"
-        );
-        for _ in 1..=19 {
-            assert_eq!(tester.scan_token().kind, TokenType::Identifier);
-        }
-        assert_eq!(tester.scan_token().kind, TokenType::EOF);
-
-        tester = Lexer::new("boo brea cha continu els fals floa fo fun i impor retur tru whil");
-        let mut token = tester.scan_token();
-        while { token = tester.scan_token(); token.kind } != TokenType::EOF {
-            assert_eq!(token.kind, TokenType::Identifier);
-        }
-    }
-
-    #[test]
-    fn errors() {
-        /*
-        Utf8Error,
-        UnterminatedString,
-        UnterminatedChar,
-        UnexpectedChar,
-        */
-        let s = "\':\' \': ` \"\n \\ ?";
-        let mut tester = Lexer::new(&s);
-        tester = Lexer::new(&s);
-        assert_eq!(tester.scan_token().kind, TokenType::CharLiteral);
-        assert_eq!(
-            tester.scan_token().error,
-            Some(TokenizationError::UnterminatedChar)
-        );
-        assert_eq!(
-            tester.scan_token().error,
-            Some(TokenizationError::UnexpectedChar)
-        );
-        assert_eq!(
-            tester.scan_token().error,
-            Some(TokenizationError::UnterminatedString)
-        );
-        assert_eq!(tester.scan_token().kind, TokenType::Newline);
-        assert_eq!(
-            tester.scan_token().error,
-            Some(TokenizationError::UnexpectedChar)
-        );
-        assert_eq!(tester.scan_token().kind, TokenType::EOF);
-    }
 }

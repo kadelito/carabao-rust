@@ -8,14 +8,14 @@ mod parsing;
 mod runtime;
 mod standard_library;
 mod stmt_ast;
-mod values;
 mod types;
+mod values;
 
 use std::{env, fs, process};
 
 use crate::standard_library::registry;
 use crate::{
-    analysis::UsageError, debug::DebugRuntimeError, parsing::ParseError, runtime::RuntimeError,
+    analysis::UsageError, parsing::ParseError, runtime::RuntimeError,
 };
 
 fn main() -> Result<(), ProgramError> {
@@ -45,7 +45,6 @@ fn run(config: &Config) -> Result<(), ProgramError> {
 pub enum ProgramError {
     IOError,
     ParseError(Vec<ParseError>),
-    DebugError(DebugRuntimeError),
     UsageError(Vec<UsageError>),
     RuntimeError(RuntimeError),
 }
@@ -80,13 +79,11 @@ mod main_tests {
     use crate::values::TypedValue;
 
     macro_rules! log {
-        ($val: expr) => {
-            {
-                let x = $val;
-                println!("{} = {}", stringify!($val), x);
-                x
-            }
-        };
+        ($val: expr) => {{
+            let x = $val;
+            println!("{} = {}", stringify!($val), x);
+            x
+        }};
     }
 
     #[test]
@@ -229,36 +226,19 @@ mod main_tests {
 
         assert_eq!(
             vm.run(),
-            Ok(TypedValue::from(vec![
-                TypedValue::Int(0),
-                TypedValue::Int(10),
-                TypedValue::Int(20),
-                TypedValue::Int(30),
-                TypedValue::Int(40),
-                TypedValue::Int(50),
-                TypedValue::Int(60),
-                TypedValue::Int(70),
-                TypedValue::Int(80),
-                TypedValue::Int(90),
-            ]))
+            Ok(vec![0, 10, 20, 30, 40, 50, 60, 70, 80, 90].into())
         );
-        assert_eq!(vm.run(), Ok(TypedValue::from(vec![TypedValue::Int(0), TypedValue::Int(10)])));
+        assert_eq!(vm.run(), Ok(vec![0, 10].into()));
         assert_eq!(vm.run(), Ok(TypedValue::Int(10)));
-        
+
         assert_eq!(vm.run(), Ok(TypedValue::from("234")));
-        assert_eq!(
-            vm.run(),
-            Ok(TypedValue::from(vec![
-                TypedValue::Int(20),
-                TypedValue::Int(30),
-                TypedValue::Int(40),
-            ]))
-        );
+        assert_eq!(vm.run(), Ok(vec![20, 30, 40].into()));
     }
 
     #[test]
     fn overloading() {
-        let mut vm = runtime::from(r#"
+        let mut vm = runtime::from(
+            r#"
             func overload(int x, int num) {
                 <<(x + ", the integer #" + num)
             }
@@ -272,11 +252,53 @@ mod main_tests {
             overload("10", 2) // 10, the string #2
             "method".overload(3) // method, the string #3
             overload(10, 4) // 10, the integer #4 (should call the first 'overload')
-        "#).unwrap();
-        
+        "#,
+        )
+        .unwrap();
+
         assert_eq!(vm.run(), Ok(TypedValue::from("10, the integer #1")));
         assert_eq!(vm.run(), Ok(TypedValue::from("\"10\", the string #2")));
         assert_eq!(vm.run(), Ok(TypedValue::from("\"method\", the string #3")));
         assert_eq!(vm.run(), Ok(TypedValue::from("10, the integer #4")));
     }
+
+    #[test]
+    fn string_ordering() {
+        let mut vm = runtime::from(
+            r#"
+            func test(string s1, string s2) {
+                <<(s1 == s2)
+                <<(s1 < s2)
+                <<(s1 > s2)
+                <<(s1 <= s2)
+                <<(s1 >= s2)
+            }
+
+            test("", "")
+            test("abc", "abc")
+            test("abc", "ABC")
+            test("abc", "abcd")
+            test("def", "abc")
+            test("abc", "def")
+            test("123", "abc")
+        "#,
+        )
+        .unwrap();
+
+        let mut do_test = |expected: [bool; 5]| {
+            for comparison in expected {
+                assert_eq!(vm.run().unwrap(), TypedValue::Bool(comparison));
+            }
+        };
+
+        do_test([true, false, false, true, true]); // both empty
+        do_test([true, false, false, true, true]); // both abc
+        do_test([false, false, true, false, true]); // abc & ABC (ascii lower > upper)
+        do_test([false, true, false, true, false]); // abc & abcd (shorter < greater)
+        do_test([false, false, true, false, true]); // def & abc (alphabetically def > abc)
+        do_test([false, true, false, true, false]); // abc & def (see above)
+        do_test([false, true, false, true, false]); // 123 & abc (ascii digits < letters)
+        assert_eq!(vm.run().unwrap(), TypedValue::None);
+    }
+
 }

@@ -2,6 +2,7 @@ use crate::expr_ast::*;
 use crate::values::*;
 use crate::stmt_ast::*;
 
+#[allow(unused)]
 pub mod opcodes {
     use crate::{registry::GLOBAL_FUNCS, codegen::OpCode, values::{TypedFunction, TypedValue}};
 
@@ -139,84 +140,4 @@ pub mod opcodes {
             self.func.code[self.ip - 1]
         }
     }
-}
-
-#[derive(Debug, PartialEq)]
-pub enum DebugRuntimeError {
-    TypeError,
-    OperatorError, // should never happen
-    StateRequired,
-}
-
-struct AstPrinter {
-    as_tree: bool,
-    depth: i8,
-}
-
-pub fn expr_to_str(expr: &Expr, as_tree: bool) -> String {
-    String::new()
-}
-
-struct DebugAstPrinter {
-    depth: usize
-}
-
-pub fn stmt_to_str(stmt: &Stmt) -> String {
-    DebugAstPrinter {
-        depth: 0,
-    }.fmt(stmt)
-}
-
-impl DebugAstPrinter {
-    pub fn fmt(&mut self, stmt: &Stmt) -> String {
-        // format!("{}{}", TAB.repeat(self.depth), stmt.accept(self))
-        todo!()
-    }
-}
-
-struct StaticRunner;
-
-pub fn evaluate_static(expr: &Expr) -> Result<TypedValue, DebugRuntimeError> {
-    // expr.accept(&mut StaticRunner)
-    todo!()
-}
-
-fn coerce_types(val1: TypedValue, val2: TypedValue) -> Result<(TypedValue, TypedValue), DebugRuntimeError> {
-    use TypedValue as V;
-    
-    // Implicit casting cases:
-    // string & any -> both string
-    // int & float -> both float
-    // int & char -> both int
-
-    if val1.get_type() == val2.get_type() {
-        // Already the same type
-        Ok((val1, val2))
-    } else if let V::String(_) = val1 {
-        // val1 is a string
-        Ok((val1, V::from(val2.to_string())))
-    } else if let V::String(_) = val2 {
-        // val2 is a string
-        Ok((V::from(val1.to_string()), val2))
-    } else {
-        match (&val1, &val2) {
-            (V::Int(i1), V::Float(_)) => Ok((V::Float(*i1 as f64), val2)),
-            (V::Int(_), V::Char(c2)) => Ok((val1, V::Int(*c2 as i64))),
-            (V::Float(_), V::Int(i2)) => Ok((val1, V::Float(*i2 as f64))),
-            (V::Char(c1), V::Int(_)) => Ok((V::Int(*c1 as i64), val2)),
-            _ => Err(DebugRuntimeError::TypeError),
-        }
-    }
-}
-
-pub fn run_static(stmts: &Vec<Stmt>) -> Result<(), DebugRuntimeError> {
-    for stmt in stmts {
-        run_static_single(stmt)?;
-    }
-    Ok(())
-}
-
-pub fn run_static_single(stmt: &Stmt) -> Result<(), DebugRuntimeError> {
-    // stmt.accept(&mut StaticRunner)
-    todo!()
 }
