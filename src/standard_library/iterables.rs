@@ -154,4 +154,21 @@ pub mod strings {
         list.push(TypedValue::String(ThinRc::new((), temp.into_boxed_slice())));
         TypedValue::from(list)
     }
+
+    // -N -> a < b
+    //  0 -> a = b
+    // +N -> a > b
+    // Comparisons are determined by unicode scalar value
+    pub fn compare(args: &[TypedValue]) -> TypedValue {
+        let a_chars = val_into!(&args[0] => String).slice.iter();
+        let b_chars = val_into!(&args[1] => String).slice.iter();
+        (a_chars.cmp(b_chars) as i64).into()
+    }
+
+    // Helper for strings::compare().
+    // Returns -1 if a <= b, 1 otherwise.
+    // Assumes a == b has already been checked to avoid checking for it separately.
+    fn compare_any<T: PartialOrd>(a: T, b: T) -> i64 {
+        if a <= b { -1 } else { 1 }
+    }
 }

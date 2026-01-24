@@ -5,7 +5,6 @@ use crate::{
 };
 
 pub mod macros {
-
     macro_rules! val_into {
         ($val: expr => $variant: ident) => {{
             let TypedValue::$variant(val) = $val else {
@@ -43,7 +42,7 @@ macro_rules! native_func {
 /// An array of functions and their identifiers, accessible in Carabao code.
 /// 
 /// Blank identifiers correspond to functions that can only be called implicitly.
-pub const GLOBAL_FUNCS: LazyCell<[(&'static str, TypedValue); 19]> = LazyCell::new(|| {
+pub const GLOBAL_FUNCS: LazyCell<[(&'static str, TypedValue); 20]> = LazyCell::new(|| {
     use ValueType::*;
     [
         // native functions available to the user in global scope
@@ -58,10 +57,11 @@ pub const GLOBAL_FUNCS: LazyCell<[(&'static str, TypedValue); 19]> = LazyCell::n
         // internal, type-unchecked functions
         // the string is the internal name, not identifier
 
-        native_func!("str_len",    iterables::strings::len),
+        native_func!("str_len", iterables::strings::len),
         native_func!("str_concat", iterables::strings::concat),
-        native_func!("str_slice",  iterables::strings::slice),
-        native_func!("str_index_get",  iterables::strings::index),
+        native_func!("str_slice", iterables::strings::slice),
+        native_func!("str_index_get", iterables::strings::index),
+        native_func!("str_cmp", iterables::strings::compare),
 
         native_func!("list_len",       iterables::lists::len),
         native_func!("list_concat",    iterables::lists::concat),

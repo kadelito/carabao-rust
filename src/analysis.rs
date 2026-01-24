@@ -746,17 +746,11 @@ impl<'ast> ExprVisitor<'_, ValueType> for Resolver<'ast> {
             },
             ValueType::None => self.error_at_token(op, UsageError::InvalidOperator),
             ValueType::List(value_type) => match op.kind() {
-                TokenType::Plus => ValueType::String,
-                TokenType::Less
-                | TokenType::Greater
-                | TokenType::DoubleLess
-                | TokenType::DoubleGreater
-                | TokenType::GreaterEqual
-                | TokenType::LessEqual => ValueType::Bool,
+                TokenType::Plus => ValueType::List(value_type),
                 _ => self.error_at_token(op, UsageError::InvalidOperator),
             },
             ValueType::Object { .. } => internal_error!("Nameless object in sym binary expr"),
-            ValueType::Range(value_type) => todo!(), // TODO? adding numeric ranges
+            ValueType::Range(value_type) => todo!(), // TODO? adding numeric ranges? maybe bitwise/subtraction too
             ValueType::Function { .. } => internal_error!("Function in sym binary expr"),
             ValueType::UserType(_) => internal_error!("User type in sym binary expr"),
         }

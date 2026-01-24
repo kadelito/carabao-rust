@@ -284,6 +284,7 @@ impl Generator {
         self.write_byte(BUILTIN_FUNC_INDICES[func_name] as u8);
     }
 
+    /// Calls a native function on some arguments WITHOUT casting.
     fn implicit_native_call(&mut self, func_name: &str, args: &[&Expr]) {
         self.write_native(func_name);
         for arg in args {
@@ -717,6 +718,8 @@ impl ExprVisitor<'_, ()> for Generator {
         }
         macro_rules! write_binary_call {
             ($func_name: expr) => {
+                // self.implicit_native_call cannot be used
+                // because it does not coerce parameters.
                 self.write_native($func_name);
                 self.code_expr_into(&both, left);
                 self.code_expr_into(&both, right);
@@ -768,7 +771,9 @@ impl ExprVisitor<'_, ()> for Generator {
                     write_binary!(OpCode::IntGreater);
                     self.write_instr(OpCode::BoolNot);
                 }
-                TokenType::DoubleDot => todo!(),
+                TokenType::DoubleDot => {
+                    write_binary_call!("new_range");
+                }
                 _ => internal_error!("Invalid operator made it to codegen"),
             },
             ValueType::Float => match op.kind() {
@@ -787,19 +792,40 @@ impl ExprVisitor<'_, ()> for Generator {
                     write_binary!(OpCode::FloatGreater);
                     self.write_instr(OpCode::BoolNot);
                 }
-                TokenType::DoubleDot => todo!(),
+                TokenType::DoubleDot => {
+                    write_binary_call!("new_range");
+                },
                 _ => internal_error!("Invalid operator made it to codegen"),
             },
             ValueType::Bool => internal_error!("Boolean operands should be in Expr::Logical"),
-            ValueType::String => match op.kind() {
-                TokenType::Plus => {
+            ValueType::String => {
+                if op.kind() == TokenType::Plus {
                     write_binary_call!("str_concat");
+                } else {
+                    write_binary_call!("str_cmp");
+                    self.new_constant(TypedValue::Int(0));
+                    match op.kind() {
+                        // cmp(s1, s2) < 0
+                        TokenType::Less => {
+                            self.write_instr(OpCode::IntLess);
+                        }
+                        // cmp(s1, s2) > 0
+                        TokenType::Greater => {
+                            self.write_instr(OpCode::IntGreater);
+                        }
+                        // !(cmp(s1, s2) < 0)
+                        TokenType::GreaterEqual => {
+                            self.write_instr(OpCode::IntLess);
+                            self.write_instr(OpCode::BoolNot);
+                        }
+                        // !(cmp(s1, s2) > 0)
+                        TokenType::LessEqual => {
+                            self.write_instr(OpCode::IntGreater);
+                            self.write_instr(OpCode::BoolNot);
+                        }
+                        _ => internal_error!("Invalid operator made it to codegen"),
+                    }
                 }
-                TokenType::Less => todo!(),
-                TokenType::Greater => todo!(),
-                TokenType::GreaterEqual => todo!(),
-                TokenType::LessEqual => todo!(),
-                _ => internal_error!("Invalid operator made it to codegen"),
             },
             ValueType::List(_) => match op.kind() {
                 TokenType::Plus => {
@@ -863,7 +889,7 @@ impl ExprVisitor<'_, ()> for Generator {
         }
     }
 
-    fn visit_cast_expr(&mut self, expr: &Expr, new_type: &ValueType, id: usize) {
+    fn visit_cast_expr(&mut self, expr: &Expr, new_type: &ValueType, _id: usize) {
         self.code_expr_as_is(expr);
         let old_type = self.get_expr_type(expr);
         if old_type == new_type {
@@ -874,7 +900,7 @@ impl ExprVisitor<'_, ()> for Generator {
         self.write_instr(cast_byte);
     }
 
-    fn visit_unary_expr(&mut self, op: &Token, target: &Expr, prefix: &bool, id: usize) {
+    fn visit_unary_expr(&mut self, op: &Token, target: &Expr, _prefix: &bool, _id: usize) {
         self.update_loc(op);
 
         #[cfg(test)]

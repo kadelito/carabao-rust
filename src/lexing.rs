@@ -520,7 +520,6 @@ impl<'a> Lexer<'a> {
             '"' => self.string(),
 
             // Char literal
-            // TODO escape characters here too
             '\'' => {
                 let char = self.advance(); // the char itself
                 if self.try_consume('\'') {

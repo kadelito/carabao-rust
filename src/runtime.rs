@@ -54,13 +54,14 @@ macro_rules! vm_pop_val {
 }
 
 pub fn interpret(src: &str) -> Result<(), ProgramError> {
-    let parser = Parser::from(src);
-    let stmts = parser
-        .parse()
-        .map_err(|errs| ProgramError::ParseError(errs))?;
-    let context = analyze(&stmts).map_err(|errs| ProgramError::UsageError(errs))?;
-    let main_script = generate(&stmts, context);
-    drop(stmts);
+    let main_script = {
+        let parser = Parser::from(src);
+        let stmts = parser
+            .parse()
+            .map_err(|errs| ProgramError::ParseError(errs))?;
+        let context = analyze(&stmts).map_err(|errs| ProgramError::UsageError(errs))?;
+        generate(&stmts, context)
+    };
     #[cfg(feature = "debug")]
     println!("==================== EXECUTION START ====================");
     run(main_script)

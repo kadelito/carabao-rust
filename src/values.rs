@@ -5,13 +5,10 @@ use std::{
     u32,
 };
 
-use thin_dst::{ThinData, ThinRc};
+use thin_dst::ThinRc;
 
 use crate::types::*;
-use crate::{
-    codegen::LineRLE,
-    errors::macros::internal_error,
-};
+use crate::{codegen::LineRLE, errors::macros::internal_error};
 
 #[derive(PartialEq, Clone)]
 pub enum TypedValue {
@@ -27,6 +24,56 @@ pub enum TypedValue {
     List(MutRc<Vec<TypedValue>>),
     Object(MutRc<[TypedValue]>),
     None,
+}
+
+impl TypedValue {
+    pub fn get_type(&self) -> ValueType {
+        match self {
+            TypedValue::None => ValueType::None,
+            TypedValue::Any(_) => ValueType::Any,
+            TypedValue::Int(_) => ValueType::Int,
+            TypedValue::Float(_) => ValueType::Float,
+            TypedValue::Char(_) => ValueType::Char,
+            TypedValue::Bool(_) => ValueType::Bool,
+            TypedValue::String(_) => ValueType::String,
+            TypedValue::Range(range) => ValueType::Range(range.0.get_type().into()),
+            TypedValue::Function(function) => {
+                let TypedFunction {
+                    params, ret_type, ..
+                } = function.as_ref();
+                ValueType::Function(
+                    FunctionType {
+                        ret_type: ret_type.clone(),
+                        params: params.clone(),
+                        native: false,
+                    }
+                    .into(),
+                )
+            }
+            TypedValue::NativeFunc(function) => {
+                let TypedNativeFunction {
+                    params, ret_type, ..
+                } = function.as_ref();
+                ValueType::Function(
+                    FunctionType {
+                        ret_type: ret_type.clone(),
+                        params: (*params).into(),
+                        native: true,
+                    }
+                    .into(),
+                )
+            }
+            TypedValue::List(list) => ValueType::List(
+                if let Some(first) = list.get().first() {
+                    first.get_type()
+                } else {
+                    ValueType::Any
+                }
+                .into(),
+            ),
+            TypedValue::Object(_) => internal_error!("Runtime object does not know its fields"),
+        }
+    }
 }
 
 impl Debug for TypedValue {
@@ -94,6 +141,21 @@ impl Display for TypedValue {
     }
 }
 
+impl<T> From<Vec<T>> for TypedValue
+where
+    TypedValue: From<T>,
+{
+    fn from(value: Vec<T>) -> Self {
+        Self::List(
+            value
+                .into_iter()
+                .map(|item| item.into())
+                .collect::<Vec<_>>()
+                .into(),
+        )
+    }
+}
+
 impl From<String> for TypedValue {
     fn from(value: String) -> Self {
         let utf16_chars = value
@@ -116,110 +178,70 @@ impl From<TypedNativeFunction> for TypedValue {
     }
 }
 
-impl From<Vec<TypedValue>> for TypedValue {
-    fn from(value: Vec<TypedValue>) -> Self {
-        Self::List(value.into())
+impl From<i64> for TypedValue {
+    fn from(value: i64) -> Self {
+        Self::Int(value)
     }
 }
 
-impl TypedValue {
-    pub fn get_type(&self) -> ValueType {
-        match self {
-            TypedValue::None => ValueType::None,
-            TypedValue::Any(_) => ValueType::Any,
-            TypedValue::Int(_) => ValueType::Int,
-            TypedValue::Float(_) => ValueType::Float,
-            TypedValue::Char(_) => ValueType::Char,
-            TypedValue::Bool(_) => ValueType::Bool,
-            TypedValue::String(_) => ValueType::String,
-            TypedValue::Range(range) => ValueType::Range(range.0.get_type().into()),
-            TypedValue::Function(function) => {
-                let TypedFunction {
-                    params, ret_type, ..
-                } = function.as_ref();
-                ValueType::Function(
-                    FunctionType {
-                        ret_type: ret_type.clone(),
-                        params: params.clone(),
-                        native: false,
-                    }
-                    .into(),
-                )
-            }
-            TypedValue::NativeFunc(function) => {
-                let TypedNativeFunction {
-                    params, ret_type, ..
-                } = function.as_ref();
-                ValueType::Function(
-                    FunctionType {
-                        ret_type: ret_type.clone(),
-                        params: (*params).into(),
-                        native: true,
-                    }
-                    .into(),
-                )
-            }
-            TypedValue::List(list) => ValueType::List(
-                if let Some(first) = list.get().first() {
-                    first.get_type()
-                } else {
-                    ValueType::Any
-                }
-                .into(),
-            ),
-            TypedValue::Object(_) => internal_error!("Runtime object does not know its fields"),
-        }
+impl From<f64> for TypedValue {
+    fn from(value: f64) -> Self {
+        Self::Float(value)
+    }
+}
+
+impl From<bool> for TypedValue {
+    fn from(value: bool) -> Self {
+        Self::Bool(value)
+    }
+}
+
+impl From<char> for TypedValue {
+    fn from(value: char) -> Self {
+        Self::Char(value)
     }
 }
 
 #[derive(Debug)]
-pub struct MutRc<T: ?Sized> {
-    inner: Rc<UnsafeCell<T>>,
-}
+pub struct MutRc<T: ?Sized>(Rc<UnsafeCell<T>>);
 
 impl<T: ?Sized> MutRc<T> {
     pub fn get(&self) -> &T {
-        unsafe { &*self.inner.get() }
+        unsafe { &*self.0.get() }
     }
 
     pub fn get_mut(&self) -> &mut T {
-        unsafe { &mut *self.inner.get() }
+        unsafe { &mut *self.0.get() }
     }
 }
 
 impl<T: ?Sized> From<Box<T>> for MutRc<T> {
     fn from(value: Box<T>) -> Self {
-        Self {
-            inner: {
-                let ptr = unsafe { &mut *Box::into_raw(value) };
-                let cell = UnsafeCell::from_mut(ptr);
-                let boxed = unsafe { Box::from_raw(cell) };
-                boxed.into()
-            },
-        }
+        Self({
+            let ptr = unsafe { &mut *Box::into_raw(value) };
+            let cell = UnsafeCell::from_mut(ptr);
+            let boxed = unsafe { Box::from_raw(cell) };
+            boxed.into()
+        })
     }
 }
 
 // Sized version that's actually safe
 impl<T: Sized> From<T> for MutRc<T> {
     fn from(value: T) -> Self {
-        Self {
-            inner: Rc::new(UnsafeCell::new(value)),
-        }
+        Self(Rc::new(UnsafeCell::new(value)))
     }
 }
 
-impl<T: ?Sized> PartialEq for MutRc<T> {
+impl<T: ?Sized + PartialEq> PartialEq for MutRc<T> {
     fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.inner, &other.inner)
+        self.get() == other.get()
     }
 }
 
 impl<T: ?Sized> Clone for MutRc<T> {
     fn clone(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
-        }
+        Self(self.0.clone())
     }
 }
 
