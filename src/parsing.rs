@@ -96,7 +96,6 @@ impl<'a> Parser<'a> {
                 let field_type = self.expect_type();
                 let field = self.expect_binding();
                 fields.push((field, field_type));
-                // TODO change this if we need a delimiter
                 self.skip_newlines();
                 if self.try_consume(TokenType::CloseBrace) {
                     break;

@@ -568,7 +568,7 @@ impl<'a> Lexer<'a> {
     }
 }
 
-//TODO use columns or indices
+//TODO use columns or indices (error locating)
 #[derive(PartialEq, Clone)]
 pub struct Token {
     kind: TokenType,
@@ -782,8 +782,7 @@ pub enum TokenType {
     Identifier,
 
     // Keywords
-    // TODO class/struct
-    // Class, // im hesitant abt this one
+    // TODO replace structs with classes? guaranteed layout for base class (dispatch = indices)
     Struct,
     New,
     Any,

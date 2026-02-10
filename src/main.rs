@@ -14,23 +14,18 @@ mod values;
 use std::{env, fs, process};
 
 use crate::standard_library::registry;
-use crate::{
-    analysis::UsageError, parsing::ParseError, runtime::RuntimeError,
-};
+use crate::{analysis::UsageError, parsing::ParseError, runtime::RuntimeError};
 
 fn main() -> Result<(), ProgramError> {
     // vm::main();
     // return Ok(());
     let args: Vec<String> = env::args().collect();
 
-    let config = match Config::build(args) {
-        Ok(con) => con,
-        Err(e) => {
-            eprintln!("Error parsing arguments: {}", e);
-            eprintln!("Usage: carabao [options] path\\to\\file.cbo");
-            process::exit(1);
-        }
-    };
+    let config = Config::build(args).unwrap_or_else(|e| {
+        eprintln!("Error parsing arguments: {}", e);
+        eprintln!("Usage: carabao [options] path\\to\\file.cbo");
+        process::exit(1);
+    });
 
     run(&config)
 }
@@ -56,8 +51,6 @@ pub struct Config {
 
 impl Config {
     fn build(mut program_args: Vec<String>) -> Result<Config, String> {
-        // TODO TERRACE aka 0x54455252414345
-
         if program_args.len() < 2 {
             return Err("not enough arguments".to_string());
         }
@@ -300,5 +293,4 @@ mod main_tests {
         do_test([false, true, false, true, false]); // 123 & abc (ascii digits < letters)
         assert_eq!(vm.run().unwrap(), TypedValue::None);
     }
-
 }
