@@ -151,9 +151,9 @@ mod main_tests {
         )
         .unwrap();
         let mut gcd_assert = |a: i64, b: i64, gcd: i64| {
-            let _ = vm.run_with_input(TypedValue::Int(259));
-            let gcd = vm.run_with_input(TypedValue::Int(77)).unwrap();
-            assert_eq!(gcd, TypedValue::Int(7));
+            let _ = vm.run_with_input(TypedValue::Int(a));
+            let ans = vm.run_with_input(TypedValue::Int(b)).unwrap();
+            assert_eq!(ans, TypedValue::Int(gcd));
         };
         gcd_assert(259, 77, 77);
     }
