@@ -155,7 +155,7 @@ mod main_tests {
             let ans = vm.run_with_input(TypedValue::Int(b)).unwrap();
             assert_eq!(ans, TypedValue::Int(gcd));
         };
-        gcd_assert(259, 77, 77);
+        gcd_assert(259, 77, 7);
     }
 
     #[test]
